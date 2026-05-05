@@ -96,6 +96,16 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         torch.set_num_threads(threads)
         faster_whisper_threads = threads
 
+    explicit_hotwords = args.pop("hotwords")
+    auto_hotwords_text = args.pop("auto_hotwords")
+    auto_hotwords_max = args.pop("auto_hotwords_max")
+    if auto_hotwords_text:
+        from whisperx.hotword_extract import extract_hotwords, merge_hotwords
+        derived = extract_hotwords(auto_hotwords_text, max_terms=auto_hotwords_max)
+        merged_hotwords = merge_hotwords(explicit_hotwords, derived)
+    else:
+        merged_hotwords = explicit_hotwords
+
     asr_options = {
         "beam_size": args.pop("beam_size"),
         "patience": args.pop("patience"),
@@ -106,7 +116,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         "no_speech_threshold": args.pop("no_speech_threshold"),
         "condition_on_previous_text": False,
         "initial_prompt": args.pop("initial_prompt"),
-        "hotwords": args.pop("hotwords"),
+        "hotwords": merged_hotwords,
         "suppress_tokens": [int(x) for x in args.pop("suppress_tokens").split(",")],
         "suppress_numerals": args.pop("suppress_numerals"),
     }

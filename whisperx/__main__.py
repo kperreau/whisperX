@@ -59,6 +59,8 @@ def cli():
 
     parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
     parser.add_argument("--hotwords", type=str, default=None, help="hotwords/hint phrases to the model (e.g. \"WhisperX, PyAnnote, GPU\"); improves recognition of rare/technical terms")
+    parser.add_argument("--auto_hotwords", type=str, default=None, help="free-form text from which proper nouns, units (m², €, %, …) and acronyms are extracted automatically and fed as hotwords. Unlike --initial_prompt, it does NOT make the model skip the first sentence when the prompt overlaps with the audio. Merged with --hotwords if both are given.")
+    parser.add_argument("--auto_hotwords_max", type=int, default=30, help="cap on the number of hotwords extracted by --auto_hotwords (default 30)")
     parser.add_argument("--condition_on_previous_text", type=str2bool, default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop")
     parser.add_argument("--fp16", type=str2bool, default=True, help="whether to perform inference in fp16; True by default")
 

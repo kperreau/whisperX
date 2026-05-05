@@ -31,6 +31,26 @@ def assign_word_speakers(*args, **kwargs):
     return diarize.assign_word_speakers(*args, **kwargs)
 
 
+def extract_hotwords(*args, **kwargs):
+    """Extract a hotwords string from free-form text.
+
+    Convenience re-export of :func:`whisperx.hotword_extract.extract_hotwords`.
+    Use this when you want to feed a transcript / description as vocabulary
+    biasing without triggering Whisper's "this was already said" behaviour.
+    """
+    he = _lazy_import("hotword_extract")
+    return he.extract_hotwords(*args, **kwargs)
+
+
+def merge_hotwords(*args, **kwargs):
+    """Merge several hotwords strings, deduplicating case-insensitively.
+
+    Convenience re-export of :func:`whisperx.hotword_extract.merge_hotwords`.
+    """
+    he = _lazy_import("hotword_extract")
+    return he.merge_hotwords(*args, **kwargs)
+
+
 def setup_logging(*args, **kwargs):
     """
     Configure logging for WhisperX.
