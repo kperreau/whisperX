@@ -28,19 +28,20 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+profile = ["py-spy>=0.4", "scalene>=1.5"]
 
 [project.scripts]
 whisperx = "whisperx.__main__:cli"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["whisperx*"]
+[tool.maturin]
+manifest-path = "crates/whisperx_ext/Cargo.toml"
+module-name = "whisperx_ext"
+python-packages = ["whisperx"]
+exclude = ["crates/whisperx_ext/target/**/*"]
 
 # torchcodec (transitive dep of pyannote-audio >=4) has no wheels for Linux aarch64
 [tool.uv]
