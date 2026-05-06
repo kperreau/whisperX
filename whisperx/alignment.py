@@ -349,12 +349,14 @@ def align(
         batch_idxs = eligible_indices[batch_start:batch_start + batch_size]
         batch = [segment_inputs[i] for i in batch_idxs]
 
-        max_len = max(item.waveform.shape[-1] for item in batch)
-        padded = torch.zeros((len(batch), max_len), dtype=batch[0].waveform.dtype)
-        for bi, item in enumerate(batch):
-            wf = item.waveform[0]
-            padded[bi, :wf.shape[-1]] = wf
-        padded = padded.to(device)
+        # Stack variable-length waveforms with right-side zero padding.
+        # pad_sequence is a vectorized C path — strictly faster than a Python
+        # `for bi: padded[bi, :L] = wf` loop and identical numerically.
+        padded = torch.nn.utils.rnn.pad_sequence(
+            [item.waveform[0] for item in batch],
+            batch_first=True,
+            padding_value=0.0,
+        ).to(device)
 
         content_lengths = torch.as_tensor(
             [item.content_length for item in batch], device=device, dtype=torch.long,
@@ -364,11 +366,12 @@ def align(
             if model_type == "torchaudio":
                 emissions, output_lengths = model(padded, lengths=content_lengths)
             elif model_type == "huggingface":
-                attention_mask = torch.zeros(
-                    padded.shape[0], padded.shape[-1], device=device, dtype=torch.long,
-                )
-                for bi, item in enumerate(batch):
-                    attention_mask[bi, :item.content_length] = 1
+                # Vectorized attention mask: True where the column index is
+                # within the item's content length.
+                attention_mask = (
+                    torch.arange(padded.shape[-1], device=device).unsqueeze(0)
+                    < content_lengths.unsqueeze(1)
+                ).long()
                 emissions = model(padded, attention_mask=attention_mask).logits
                 output_lengths = _hf_output_lengths(model, content_lengths)
             else:
