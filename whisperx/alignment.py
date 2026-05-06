@@ -2,6 +2,7 @@
 Forced Alignment with Whisper
 C. Max Bain
 """
+from dataclasses import dataclass
 from typing import Iterable, Optional, Union, List
 
 import numpy as np
@@ -83,7 +84,14 @@ DEFAULT_ALIGN_MODELS_HF = {
 }
 
 
-def load_align_model(language_code: str, device: str, model_name: Optional[str] = None, model_dir=None, model_cache_only: bool = False):
+def load_align_model(
+    language_code: str,
+    device: str,
+    model_name: Optional[str] = None,
+    model_dir=None,
+    model_cache_only: bool = False,
+    quantize: bool = False,
+):
     if model_name is None:
         # use default model
         if language_code in DEFAULT_ALIGN_MODELS_TORCH:
@@ -115,6 +123,22 @@ def load_align_model(language_code: str, device: str, model_name: Optional[str] 
         labels = processor.tokenizer.get_vocab()
         align_dictionary = {char.lower(): code for char,code in processor.tokenizer.get_vocab().items()}
 
+    if quantize:
+        if device != "cpu":
+            logger.warning(
+                "align_quantize is a CPU-only optimization (dynamic int8); "
+                f"requested device is {device!r}, skipping quantization."
+            )
+        else:
+            try:
+                align_model.eval()
+                align_model = torch.ao.quantization.quantize_dynamic(
+                    align_model, {torch.nn.Linear}, dtype=torch.qint8,
+                )
+                logger.info("Applied dynamic int8 quantization to align model (Linear layers)")
+            except Exception as e:
+                logger.warning(f"Failed to apply dynamic quantization to align model: {e}")
+
     align_metadata = {"language": language_code, "dictionary": align_dictionary, "type": pipeline_type}
 
     return align_model, align_metadata
@@ -131,6 +155,7 @@ def align(
     print_progress: bool = False,
     combined_progress: bool = False,
     progress_callback: ProgressCallback = None,
+    batch_size: int = 8,
 ) -> AlignedTranscriptionResult:
     """
     Align phoneme recognition predictions to known transcription.
@@ -230,95 +255,181 @@ def align(
                 d[key] = val
         return d
 
-    aligned_segments: List[SingleAlignedSegment] = []
+    # Resolve blank_id once.
+    blank_id = 0
+    for char, code in model_dictionary.items():
+        if char == '[pad]' or char == '<pad>':
+            blank_id = code
 
-    # 2. Get prediction matrix from alignment model & align
+    # 2a. Pre-collect per-segment alignment inputs (waveform slice + eligibility),
+    #     so we can batch the wav2vec2 forward pass below.
+    @dataclass
+    class _SegmentInput:
+        sdx: int
+        t1: float
+        t2: float
+        text: str
+        avg_logprob: Optional[float]
+        eligible: bool
+        skip_reason: Optional[str]
+        fallback: SingleAlignedSegment
+        waveform: Optional[torch.Tensor]  # shape (1, T_orig_or_padded_to_400)
+        content_length: int  # actual content length BEFORE batch padding
+
+    segment_inputs: List[_SegmentInput] = []
     for sdx, segment in enumerate(transcript):
-
         t1 = segment["start"]
         t2 = segment["end"]
         text = segment["text"]
         avg_logprob = segment.get("avg_logprob")
 
-        aligned_seg: SingleAlignedSegment = {
+        fallback: SingleAlignedSegment = {
             "start": t1,
             "end": t2,
             "text": text,
             "words": [],
             "chars": None,
         }
-
         if avg_logprob is not None:
-            aligned_seg["avg_logprob"] = avg_logprob
-
+            fallback["avg_logprob"] = avg_logprob
         if return_char_alignments:
-            aligned_seg["chars"] = []
+            fallback["chars"] = []
 
-        # check we can align
+        # Filter ineligible segments without sending audio through the model.
         if len(segment_data[sdx]["clean_char"]) == 0:
-            logger.warning(f'Failed to align segment ("{segment["text"]}"): no characters in this segment found in model dictionary, resorting to original')
-            aligned_segments.append(aligned_seg)
+            segment_inputs.append(_SegmentInput(
+                sdx=sdx, t1=t1, t2=t2, text=text, avg_logprob=avg_logprob,
+                eligible=False,
+                skip_reason="no characters in this segment found in model dictionary",
+                fallback=fallback, waveform=None, content_length=0,
+            ))
             continue
-
         if t1 >= MAX_DURATION:
-            logger.warning(f'Failed to align segment ("{segment["text"]}"): original start time longer than audio duration, skipping')
-            aligned_segments.append(aligned_seg)
+            segment_inputs.append(_SegmentInput(
+                sdx=sdx, t1=t1, t2=t2, text=text, avg_logprob=avg_logprob,
+                eligible=False,
+                skip_reason="original start time longer than audio duration",
+                fallback=fallback, waveform=None, content_length=0,
+            ))
             continue
-
-        text_clean = "".join(segment_data[sdx]["clean_char"])
 
         f1 = int(t1 * SAMPLE_RATE)
         f2 = int(t2 * SAMPLE_RATE)
-
-        # TODO: Probably can get some speedup gain with batched inference here
         waveform_segment = audio[:, f1:f2]
-        # Handle the minimum input length for wav2vec2 models
-        if waveform_segment.shape[-1] < 400:
-            lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device)
+        content_length = waveform_segment.shape[-1]
+        # Wav2vec2 needs >=400 samples to produce any frame; pad up if shorter,
+        # but pass the true content length so the model masks the padding.
+        if content_length < 400:
             waveform_segment = torch.nn.functional.pad(
-                waveform_segment, (0, 400 - waveform_segment.shape[-1])
+                waveform_segment, (0, 400 - content_length)
             )
-        else:
-            lengths = None
+
+        segment_inputs.append(_SegmentInput(
+            sdx=sdx, t1=t1, t2=t2, text=text, avg_logprob=avg_logprob,
+            eligible=True, skip_reason=None, fallback=fallback,
+            waveform=waveform_segment, content_length=content_length,
+        ))
+
+    # 2b. Batched wav2vec2 forward — emissions cached per segment index.
+    eligible_indices = [i for i, item in enumerate(segment_inputs) if item.eligible]
+    emissions_by_idx: dict[int, np.ndarray] = {}
+
+    batch_size = max(1, int(batch_size))
+
+    def _hf_output_lengths(model: torch.nn.Module, input_lengths: torch.Tensor) -> torch.Tensor:
+        """Resolve HuggingFace Wav2Vec2 output frame count per item."""
+        for owner in (model, getattr(model, "wav2vec2", None)):
+            fn = getattr(owner, "_get_feat_extract_output_lengths", None) if owner is not None else None
+            if fn is not None:
+                return fn(input_lengths).to(input_lengths.device)
+        # Fallback: wav2vec2 base/large stride is 320× downsampling.
+        return torch.div(input_lengths, 320, rounding_mode="floor")
+
+    for batch_start in range(0, len(eligible_indices), batch_size):
+        batch_idxs = eligible_indices[batch_start:batch_start + batch_size]
+        batch = [segment_inputs[i] for i in batch_idxs]
+
+        # Stack variable-length waveforms with right-side zero padding.
+        # pad_sequence is a vectorized C path — strictly faster than a Python
+        # `for bi: padded[bi, :L] = wf` loop and identical numerically.
+        padded = torch.nn.utils.rnn.pad_sequence(
+            [item.waveform[0] for item in batch],
+            batch_first=True,
+            padding_value=0.0,
+        ).to(device)
+
+        content_lengths = torch.as_tensor(
+            [item.content_length for item in batch], device=device, dtype=torch.long,
+        )
 
         with torch.inference_mode():
             if model_type == "torchaudio":
-                emissions, _ = model(waveform_segment.to(device), lengths=lengths)
+                emissions, output_lengths = model(padded, lengths=content_lengths)
             elif model_type == "huggingface":
-                emissions = model(waveform_segment.to(device)).logits
+                # Vectorized attention mask: True where the column index is
+                # within the item's content length.
+                attention_mask = (
+                    torch.arange(padded.shape[-1], device=device).unsqueeze(0)
+                    < content_lengths.unsqueeze(1)
+                ).long()
+                emissions = model(padded, attention_mask=attention_mask).logits
+                output_lengths = _hf_output_lengths(model, content_lengths)
             else:
                 raise NotImplementedError(f"Align model of type {model_type} not supported.")
             emissions = torch.log_softmax(emissions, dim=-1)
 
-        emission = emissions[0].cpu().detach()
+        emissions_cpu = emissions.cpu().detach()
+        # Some torchaudio models / mock objects return None for output_lengths
+        # when no length info is available — fall back to the full T dim.
+        if output_lengths is None:
+            output_lengths_cpu = [emissions_cpu.shape[1]] * emissions_cpu.shape[0]
+        else:
+            output_lengths_cpu = output_lengths.cpu().tolist()
 
-        blank_id = 0
-        for char, code in model_dictionary.items():
-            if char == '[pad]' or char == '<pad>':
-                blank_id = code
+        for bi, item_idx in enumerate(batch_idxs):
+            out_len = max(0, int(output_lengths_cpu[bi]))
+            emission = emissions_cpu[bi, :out_len, :]
+            emissions_by_idx[item_idx] = np.ascontiguousarray(
+                emission.numpy(), dtype=np.float32,
+            )
 
-        duration = t2 - t1
-        # Rust extension expects a contiguous float32 numpy array
-        emission_np = np.ascontiguousarray(emission.numpy(), dtype=np.float32)
+    # 2c. Per-segment Rust DP + post-processing, in original transcript order.
+    aligned_segments: List[SingleAlignedSegment] = []
+    for item_idx, item in enumerate(segment_inputs):
+        sdx = item.sdx
 
-        # Run full alignment pipeline in Rust: DP + timestamps + word grouping + interpolation
+        if not item.eligible:
+            logger.warning(
+                f'Failed to align segment ("{item.text}"): {item.skip_reason}, '
+                'resorting to original'
+            )
+            aligned_segments.append(item.fallback)
+            continue
+
+        text_clean = "".join(segment_data[sdx]["clean_char"])
+        duration = item.t2 - item.t1
+        emission_np = emissions_by_idx[item_idx]
+
         rust_subsegments = _rust_align_segment(
             emission=emission_np,
-            text=text,
+            text=item.text,
             text_clean=text_clean,
             model_dictionary=model_dictionary,
             clean_cdx=segment_data[sdx]["clean_cdx"],
             sentence_spans=segment_data[sdx]["sentence_spans"],
             blank_id=blank_id,
-            t1=t1,
+            t1=item.t1,
             duration=duration,
             no_spaces=no_spaces,
             return_char_alignments=return_char_alignments,
         )
 
         if rust_subsegments is None:
-            logger.warning(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original')
-            aligned_segments.append(aligned_seg)
+            logger.warning(
+                f'Failed to align segment ("{item.text}"): backtrack failed, '
+                'resorting to original'
+            )
+            aligned_segments.append(item.fallback)
             continue
 
         for s in rust_subsegments:
@@ -330,8 +441,8 @@ def align(
             }
             if s.chars is not None:
                 sub["chars"] = [_optional_fields({"char": c.char}, c) for c in s.chars]
-            if avg_logprob is not None:
-                sub["avg_logprob"] = avg_logprob
+            if item.avg_logprob is not None:
+                sub["avg_logprob"] = item.avg_logprob
             aligned_segments.append(sub)
 
         if progress_callback is not None:

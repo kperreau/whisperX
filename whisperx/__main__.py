@@ -31,6 +31,8 @@ def cli():
 
     # alignment params
     parser.add_argument("--align_model", default=None, help="Name of phoneme-level ASR model to do alignment")
+    parser.add_argument("--align_batch_size", type=int, default=8, help="Batch size for the wav2vec2 alignment forward pass. Higher = faster on GPU, more VRAM. Set to 1 to disable batching.")
+    parser.add_argument("--align_quantize", action="store_true", help="Apply dynamic int8 quantization to the wav2vec2 alignment model (CPU only). Typically 2-3x faster on CPU at a tiny accuracy cost. Ignored on CUDA.")
     parser.add_argument("--interpolate_method", default="nearest", choices=["nearest", "linear", "ignore"], help="For word .srt, method to assign timestamps to non-aligned words, or merge them into neighbouring.")
     parser.add_argument("--no_align", action='store_true', help="Do not perform phoneme alignment")
     parser.add_argument("--return_char_alignments", action='store_true', help="Return character-level alignments in the output json file")
@@ -59,8 +61,9 @@ def cli():
 
     parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
     parser.add_argument("--hotwords", type=str, default=None, help="hotwords/hint phrases to the model (e.g. \"WhisperX, PyAnnote, GPU\"); improves recognition of rare/technical terms")
-    parser.add_argument("--auto_hotwords", type=str, default=None, help="free-form text from which proper nouns, units (m², €, %%, …) and acronyms are extracted automatically and fed as hotwords. Unlike --initial_prompt, it does NOT make the model skip the first sentence when the prompt overlaps with the audio. Merged with --hotwords if both are given.")
+    parser.add_argument("--auto_hotwords", type=str, default=None, help="free-form text from which hotwords are extracted automatically and fed to the model. Unlike --initial_prompt, it does NOT make the model skip the first sentence when the prompt overlaps with the audio. Merged with --hotwords if both are given.")
     parser.add_argument("--auto_hotwords_max", type=int, default=30, help="cap on the number of hotwords extracted by --auto_hotwords (default 30)")
+    parser.add_argument("--auto_hotwords_mode", type=str, default="formatted", choices=["names", "formatted", "all"], help="extraction strategy for --auto_hotwords. 'names' = proper nouns + units + acronyms only; 'formatted' (default) = above + digit-bearing tokens and '<digits> <digits>' bigrams so spaced numbers like '1 590' survive; 'all' = above + every word (closest to --initial_prompt biasing strength but accepts a small first-sentence-skip risk).")
     parser.add_argument("--condition_on_previous_text", type=str2bool, default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop")
     parser.add_argument("--fp16", type=str2bool, default=True, help="whether to perform inference in fp16; True by default")
 
