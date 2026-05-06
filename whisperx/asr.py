@@ -330,6 +330,7 @@ def load_model(
     use_auth_token: Optional[Union[str, bool]] = None,
     auto_hotwords: Optional[str] = None,
     auto_hotwords_max: int = 30,
+    auto_hotwords_mode: str = "formatted",
 ) -> FasterWhisperPipeline:
     """Load a Whisper model for inference.
     Args:
@@ -407,7 +408,11 @@ def load_model(
     # passed via asr_options["hotwords"] (case-insensitive dedup, order kept).
     if auto_hotwords:
         from whisperx.hotword_extract import extract_hotwords, merge_hotwords
-        derived = extract_hotwords(auto_hotwords, max_terms=auto_hotwords_max)
+        derived = extract_hotwords(
+            auto_hotwords,
+            max_terms=auto_hotwords_max,
+            mode=auto_hotwords_mode,
+        )
         default_asr_options["hotwords"] = merge_hotwords(
             default_asr_options.get("hotwords"),
             derived,

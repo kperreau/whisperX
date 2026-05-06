@@ -41,6 +41,8 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     os.makedirs(output_dir, exist_ok=True)
 
     align_model: str = args.pop("align_model")
+    align_batch_size: int = args.pop("align_batch_size")
+    align_quantize: bool = args.pop("align_quantize")
     interpolate_method: str = args.pop("interpolate_method")
     no_align: bool = args.pop("no_align")
     task: str = args.pop("task")
@@ -99,9 +101,14 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     explicit_hotwords = args.pop("hotwords")
     auto_hotwords_text = args.pop("auto_hotwords")
     auto_hotwords_max = args.pop("auto_hotwords_max")
+    auto_hotwords_mode = args.pop("auto_hotwords_mode")
     if auto_hotwords_text:
         from whisperx.hotword_extract import extract_hotwords, merge_hotwords
-        derived = extract_hotwords(auto_hotwords_text, max_terms=auto_hotwords_max)
+        derived = extract_hotwords(
+            auto_hotwords_text,
+            max_terms=auto_hotwords_max,
+            mode=auto_hotwords_mode,
+        )
         merged_hotwords = merge_hotwords(explicit_hotwords, derived)
     else:
         merged_hotwords = explicit_hotwords
@@ -177,7 +184,8 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         tmp_results = results
         results = []
         align_model, align_metadata = load_align_model(
-            align_language, device, model_name=align_model, model_dir=model_dir, model_cache_only=model_cache_only
+            align_language, device, model_name=align_model, model_dir=model_dir, model_cache_only=model_cache_only,
+            quantize=align_quantize,
         )
         for result, audio_path in tmp_results:
             # >> Align
@@ -194,7 +202,8 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                         f"New language found ({result['language']})! Previous was ({align_metadata['language']}), loading new alignment model for new language..."
                     )
                     align_model, align_metadata = load_align_model(
-                        result["language"], device, model_dir=model_dir, model_cache_only=model_cache_only
+                        result["language"], device, model_dir=model_dir, model_cache_only=model_cache_only,
+                        quantize=align_quantize,
                     )
                 logger.info("Performing alignment...")
                 result: AlignedTranscriptionResult = align(
@@ -206,6 +215,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                     interpolate_method=interpolate_method,
                     return_char_alignments=return_char_alignments,
                     print_progress=print_progress,
+                    batch_size=align_batch_size,
                 )
 
             results.append((result, audio_path))
