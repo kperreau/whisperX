@@ -1,9 +1,33 @@
 import logging
 import sys
+import warnings
 from typing import Optional
 
 _LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+_quiet_warning_filters_registered = False
+
+
+def register_quiet_warning_filters() -> None:
+    """Hide very long third-party warnings so WhisperX logs stay readable.
+
+    pyannote embeds torchcodec's FFmpeg probe errors (full tracebacks per version)
+    in a single UserWarning; WhisperX loads audio via soundfile/ffmpeg elsewhere,
+    so this warning is usually noise for CLI users.
+    """
+    global _quiet_warning_filters_registered
+    if _quiet_warning_filters_registered:
+        return
+    _quiet_warning_filters_registered = True
+    # Match pyannote's torchcodec banner (embedding FFmpeg 8→4 tracebacks). The
+    # warnings module derives "module" from the stack frame; a `module=` regex
+    # often fails to match, so we key off the stable first line of the message.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"(?s).*torchcodec is not installed correctly so built-in audio decoding will fail\..*",
+        category=UserWarning,
+    )
 
 
 def setup_logging(

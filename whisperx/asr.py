@@ -417,6 +417,15 @@ def load_model(
             default_asr_options.get("hotwords"),
             derived,
         )
+        logger.debug(
+            "Hotwords after auto_hotwords [mode=%s max=%s]: extracted=%r | merged_for_asr=%r",
+            auto_hotwords_mode,
+            auto_hotwords_max,
+            derived or "(empty)",
+            default_asr_options["hotwords"]
+            if default_asr_options["hotwords"]
+            else "(none)",
+        )
 
     suppress_numerals = default_asr_options["suppress_numerals"]
     del default_asr_options["suppress_numerals"]

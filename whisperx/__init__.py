@@ -1,5 +1,9 @@
 import importlib
 
+from whisperx.log_utils import register_quiet_warning_filters
+
+register_quiet_warning_filters()
+
 
 def _lazy_import(name):
     module = importlib.import_module(f"whisperx.{name}")

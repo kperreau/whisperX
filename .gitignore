@@ -173,3 +173,5 @@ cython_debug/
 # Rust build artifacts
 crates/**/target/
 *.so
+
+/tmp
