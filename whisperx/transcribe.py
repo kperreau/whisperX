@@ -130,6 +130,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         "no_speech_threshold": args.pop("no_speech_threshold"),
         "condition_on_previous_text": False,
         "initial_prompt": args.pop("initial_prompt"),
+        "prefix": args.pop("prefix"),
         "hotwords": merged_hotwords,
         "suppress_tokens": [int(x) for x in args.pop("suppress_tokens").split(",")],
         "suppress_numerals": args.pop("suppress_numerals"),
