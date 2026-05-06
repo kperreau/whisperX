@@ -110,7 +110,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
             mode=auto_hotwords_mode,
         )
         merged_hotwords = merge_hotwords(explicit_hotwords, derived)
-        logger.debug(
+        logger.info(
             "Hotwords after auto_hotwords [mode=%s max=%s]: extracted=%r | merged_for_asr=%r",
             auto_hotwords_mode,
             auto_hotwords_max,
