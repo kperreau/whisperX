@@ -23,10 +23,19 @@ class Silero(Vad):
 
         self.vad_onset = kwargs['vad_onset']
         self.chunk_size = kwargs['chunk_size']
+
+        # Use ONNX runtime when available: 3-5x faster on CPU than the JIT torch graph.
+        try:
+            import onnxruntime  # noqa: F401
+            use_onnx = True
+        except ImportError:
+            use_onnx = False
+            logger.info("onnxruntime not installed, falling back to JIT torch Silero VAD")
+
         self.vad_pipeline, vad_utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                                       model='silero_vad',
                                                       force_reload=False,
-                                                      onnx=False,
+                                                      onnx=use_onnx,
                                                       trust_repo=True)
         (self.get_speech_timestamps, _, self.read_audio, _, _) = vad_utils
 

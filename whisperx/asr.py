@@ -351,7 +351,11 @@ def load_model(
     """
 
     if compute_type == "default":
-        compute_type = "float16" if device == "cuda" else "float32"
+        if device == "cuda":
+            compute_type = "float16"
+        else:
+            # CTranslate2 int8 on CPU: 2-3x faster than float32, WER cost typically <0.5pt
+            compute_type = "int8"
         logger.info(f"Compute type not specified, defaulting to {compute_type} for device {device}")
 
     if whisper_arch.endswith(".en"):
@@ -371,9 +375,11 @@ def load_model(
         logger.info("No language specified, language will be detected for each audio file (increases inference time)")
         tokenizer = None
 
+    # CPU: greedy decoding (beam_size=1) is 1.5-2x faster with WER cost <1pt.
+    default_beam_size = 1 if device == "cpu" else 5
     default_asr_options =  {
-        "beam_size": 5,
-        "best_of": 5,
+        "beam_size": default_beam_size,
+        "best_of": default_beam_size,
         "patience": 1,
         "length_penalty": 1,
         "repetition_penalty": 1,

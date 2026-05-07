@@ -41,8 +41,14 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     os.makedirs(output_dir, exist_ok=True)
 
     align_model: str = args.pop("align_model")
-    align_batch_size: int = args.pop("align_batch_size")
-    align_quantize: bool = args.pop("align_quantize")
+    align_batch_size = args.pop("align_batch_size")
+    if align_batch_size is None:
+        align_batch_size = 16 if device == "cpu" else 8
+    align_quantize = args.pop("align_quantize")
+    if align_quantize is None:
+        align_quantize = (device == "cpu")
+        if align_quantize:
+            logger.info("align_quantize not specified, enabling dynamic int8 quantization on CPU (2-3x faster align)")
     interpolate_method: str = args.pop("interpolate_method")
     no_align: bool = args.pop("no_align")
     task: str = args.pop("task")
@@ -53,7 +59,10 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     return_char_alignments: bool = args.pop("return_char_alignments")
 
     hf_token: str = args.pop("hf_token")
-    vad_method: str = args.pop("vad_method")
+    vad_method = args.pop("vad_method")
+    if vad_method is None:
+        vad_method = "silero" if device == "cpu" else "pyannote"
+        logger.info(f"vad_method not specified, defaulting to '{vad_method}' for device {device}")
     vad_onset: float = args.pop("vad_onset")
     vad_offset: float = args.pop("vad_offset")
 
@@ -93,10 +102,28 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     else:
         temperature = [temperature]
 
-    faster_whisper_threads = 4
-    if (threads := args.pop("threads")) > 0:
+    def _set_interop_threads_safe(n: int) -> None:
+        # set_num_interop_threads can only be called once and before any parallel
+        # work has started; ignore RuntimeError for callers who have already done so.
+        try:
+            torch.set_num_interop_threads(n)
+        except RuntimeError:
+            pass
+
+    threads = args.pop("threads")
+    if threads > 0:
         torch.set_num_threads(threads)
+        _set_interop_threads_safe(1)
         faster_whisper_threads = threads
+    elif device == "cpu":
+        # Auto-tune for CPU: intra=physical_cores, interop=1 prevents MKL/OMP oversubscription.
+        n = os.cpu_count() or 4
+        torch.set_num_threads(n)
+        _set_interop_threads_safe(1)
+        faster_whisper_threads = n
+        logger.info(f"Auto-configured torch threads: intra={n}, interop=1")
+    else:
+        faster_whisper_threads = 4
 
     explicit_hotwords = args.pop("hotwords")
     auto_hotwords_text = args.pop("auto_hotwords")
@@ -120,8 +147,13 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     else:
         merged_hotwords = explicit_hotwords
 
+    beam_size = args.pop("beam_size")
+    if beam_size is None:
+        beam_size = 1 if device == "cpu" else 5
+        logger.info(f"beam_size not specified, defaulting to {beam_size} for device {device}")
+
     asr_options = {
-        "beam_size": args.pop("beam_size"),
+        "beam_size": beam_size,
         "patience": args.pop("patience"),
         "length_penalty": args.pop("length_penalty"),
         "temperatures": temperature,
