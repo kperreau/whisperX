@@ -131,6 +131,16 @@ def load_align_model(
             )
         else:
             try:
+                # Pick a working quantized engine. On macOS ARM the default may
+                # be "none" (NoQEngine), causing quantize_dynamic to fail at the
+                # first forward with `Didn't find engine for operation
+                # quantized::linear_prepack`. Prefer qnnpack (universal on ARM,
+                # also works on x86), fall back to fbgemm on x86.
+                supported = list(torch.backends.quantized.supported_engines)
+                preferred = [e for e in ("qnnpack", "fbgemm") if e in supported]
+                if preferred and torch.backends.quantized.engine not in preferred:
+                    torch.backends.quantized.engine = preferred[0]
+                    logger.info(f"Set torch.backends.quantized.engine = {preferred[0]!r}")
                 align_model.eval()
                 align_model = torch.ao.quantization.quantize_dynamic(
                     align_model, {torch.nn.Linear}, dtype=torch.qint8,

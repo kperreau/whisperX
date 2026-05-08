@@ -2,13 +2,14 @@ import argparse
 import gc
 import os
 import warnings
+from typing import Optional
 
 import numpy as np
 import torch
 
 from whisperx.alignment import align, load_align_model
 from whisperx.asr import load_model
-from whisperx.audio import load_audio
+from whisperx.audio import SAMPLE_RATE, load_audio
 from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 from whisperx.schema import AlignedTranscriptionResult, TranscriptionResult
 from whisperx.utils import LANGUAGES, TO_LANGUAGE_CODE, get_writer
@@ -41,8 +42,17 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     os.makedirs(output_dir, exist_ok=True)
 
     align_model: str = args.pop("align_model")
-    align_batch_size: int = args.pop("align_batch_size")
-    align_quantize: bool = args.pop("align_quantize")
+    align_batch_size = args.pop("align_batch_size")
+    if align_batch_size is None:
+        align_batch_size = 16 if device == "cpu" else 8
+    align_quantize = args.pop("align_quantize")
+    if align_quantize is None:
+        align_quantize = (device == "cpu")
+        if align_quantize:
+            logger.info("align_quantize not specified, enabling dynamic int8 quantization on CPU (2-3x faster align)")
+    align_only: bool = args.pop("align_only")
+    transcript_text: Optional[str] = args.pop("transcript_text")
+    transcript_file: Optional[str] = args.pop("transcript_file")
     interpolate_method: str = args.pop("interpolate_method")
     no_align: bool = args.pop("no_align")
     task: str = args.pop("task")
@@ -53,7 +63,10 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     return_char_alignments: bool = args.pop("return_char_alignments")
 
     hf_token: str = args.pop("hf_token")
-    vad_method: str = args.pop("vad_method")
+    vad_method = args.pop("vad_method")
+    if vad_method is None:
+        vad_method = "silero" if device == "cpu" else "pyannote"
+        logger.info(f"vad_method not specified, defaulting to '{vad_method}' for device {device}")
     vad_onset: float = args.pop("vad_onset")
     vad_offset: float = args.pop("vad_offset")
 
@@ -93,10 +106,28 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     else:
         temperature = [temperature]
 
-    faster_whisper_threads = 4
-    if (threads := args.pop("threads")) > 0:
+    def _set_interop_threads_safe(n: int) -> None:
+        # set_num_interop_threads can only be called once and before any parallel
+        # work has started; ignore RuntimeError for callers who have already done so.
+        try:
+            torch.set_num_interop_threads(n)
+        except RuntimeError:
+            pass
+
+    threads = args.pop("threads")
+    if threads > 0:
         torch.set_num_threads(threads)
+        _set_interop_threads_safe(1)
         faster_whisper_threads = threads
+    elif device == "cpu":
+        # Auto-tune for CPU: intra=physical_cores, interop=1 prevents MKL/OMP oversubscription.
+        n = os.cpu_count() or 4
+        torch.set_num_threads(n)
+        _set_interop_threads_safe(1)
+        faster_whisper_threads = n
+        logger.info(f"Auto-configured torch threads: intra={n}, interop=1")
+    else:
+        faster_whisper_threads = 4
 
     explicit_hotwords = args.pop("hotwords")
     auto_hotwords_text = args.pop("auto_hotwords")
@@ -120,8 +151,13 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     else:
         merged_hotwords = explicit_hotwords
 
+    beam_size = args.pop("beam_size")
+    if beam_size is None:
+        beam_size = 1 if device == "cpu" else 5
+        logger.info(f"beam_size not specified, defaulting to {beam_size} for device {device}")
+
     asr_options = {
-        "beam_size": args.pop("beam_size"),
+        "beam_size": beam_size,
         "patience": args.pop("patience"),
         "length_penalty": args.pop("length_penalty"),
         "temperatures": temperature,
@@ -146,46 +182,76 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         warnings.warn("--max_line_count has no effect without --max_line_width")
     writer_args = {arg: args.pop(arg) for arg in word_options}
 
-    # Part 1: VAD & ASR Loop
-    results = []
-    # model = load_model(model_name, device=device, download_root=model_dir)
-    model = load_model(
-        model_name,
-        device=device,
-        device_index=device_index,
-        download_root=model_dir,
-        compute_type=compute_type,
-        language=args["language"],
-        asr_options=asr_options,
-        vad_method=vad_method,
-        vad_options={
-            "chunk_size": chunk_size,
-            "vad_onset": vad_onset,
-            "vad_offset": vad_offset,
-        },
-        task=task,
-        local_files_only=model_cache_only,
-        threads=faster_whisper_threads,
-        use_auth_token=hf_token,
-    )
+    audio_paths = args.pop("audio")
 
-    for audio_path in args.pop("audio"):
+    if align_only:
+        # Skip Whisper+VAD entirely: align a known text against the audio.
+        # No ASR -> no hallucinations -> deterministic word-level timestamps.
+        if no_align:
+            parser.error("--align_only is incompatible with --no_align")
+        if (transcript_text is None) == (transcript_file is None):
+            parser.error("--align_only requires exactly one of --transcript_text or --transcript_file")
+        if transcript_file is not None:
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+        transcript_text = (transcript_text or "").strip()
+        if not transcript_text:
+            parser.error("Transcript provided to --align_only is empty")
+        if args["language"] is None:
+            parser.error("--align_only requires --language so we know which alignment model to load")
+        if len(audio_paths) != 1:
+            parser.error("--align_only currently supports exactly one audio file per invocation")
+
+        audio_path = audio_paths[0]
         audio = load_audio(audio_path)
-        # >> VAD & ASR
-        logger.info("Performing transcription...")
-        result: TranscriptionResult = model.transcribe(
-            audio,
-            batch_size=batch_size,
-            chunk_size=chunk_size,
-            print_progress=print_progress,
-            verbose=verbose,
+        duration = float(audio.shape[-1]) / SAMPLE_RATE
+        logger.info(f"--align_only: skipping Whisper, aligning {len(transcript_text)} chars over {duration:.2f}s of audio")
+        result: TranscriptionResult = {
+            "segments": [{"start": 0.0, "end": duration, "text": transcript_text}],
+            "language": args["language"],
+        }
+        results = [(result, audio_path)]
+    else:
+        # Part 1: VAD & ASR Loop
+        results = []
+        model = load_model(
+            model_name,
+            device=device,
+            device_index=device_index,
+            download_root=model_dir,
+            compute_type=compute_type,
+            language=args["language"],
+            asr_options=asr_options,
+            vad_method=vad_method,
+            vad_options={
+                "chunk_size": chunk_size,
+                "vad_onset": vad_onset,
+                "vad_offset": vad_offset,
+            },
+            task=task,
+            local_files_only=model_cache_only,
+            threads=faster_whisper_threads,
+            use_auth_token=hf_token,
         )
-        results.append((result, audio_path))
 
-    # Unload Whisper and VAD
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
+        audio = None
+        for audio_path in audio_paths:
+            audio = load_audio(audio_path)
+            # >> VAD & ASR
+            logger.info("Performing transcription...")
+            result: TranscriptionResult = model.transcribe(
+                audio,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                print_progress=print_progress,
+                verbose=verbose,
+            )
+            results.append((result, audio_path))
+
+        # Unload Whisper and VAD
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Part 2: Align Loop
     if not no_align:
