@@ -2,13 +2,14 @@ import argparse
 import gc
 import os
 import warnings
+from typing import Optional
 
 import numpy as np
 import torch
 
 from whisperx.alignment import align, load_align_model
 from whisperx.asr import load_model
-from whisperx.audio import load_audio
+from whisperx.audio import SAMPLE_RATE, load_audio
 from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 from whisperx.schema import AlignedTranscriptionResult, TranscriptionResult
 from whisperx.utils import LANGUAGES, TO_LANGUAGE_CODE, get_writer
@@ -49,6 +50,9 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         align_quantize = (device == "cpu")
         if align_quantize:
             logger.info("align_quantize not specified, enabling dynamic int8 quantization on CPU (2-3x faster align)")
+    align_only: bool = args.pop("align_only")
+    transcript_text: Optional[str] = args.pop("transcript_text")
+    transcript_file: Optional[str] = args.pop("transcript_file")
     interpolate_method: str = args.pop("interpolate_method")
     no_align: bool = args.pop("no_align")
     task: str = args.pop("task")
@@ -178,46 +182,76 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         warnings.warn("--max_line_count has no effect without --max_line_width")
     writer_args = {arg: args.pop(arg) for arg in word_options}
 
-    # Part 1: VAD & ASR Loop
-    results = []
-    # model = load_model(model_name, device=device, download_root=model_dir)
-    model = load_model(
-        model_name,
-        device=device,
-        device_index=device_index,
-        download_root=model_dir,
-        compute_type=compute_type,
-        language=args["language"],
-        asr_options=asr_options,
-        vad_method=vad_method,
-        vad_options={
-            "chunk_size": chunk_size,
-            "vad_onset": vad_onset,
-            "vad_offset": vad_offset,
-        },
-        task=task,
-        local_files_only=model_cache_only,
-        threads=faster_whisper_threads,
-        use_auth_token=hf_token,
-    )
+    audio_paths = args.pop("audio")
 
-    for audio_path in args.pop("audio"):
+    if align_only:
+        # Skip Whisper+VAD entirely: align a known text against the audio.
+        # No ASR -> no hallucinations -> deterministic word-level timestamps.
+        if no_align:
+            parser.error("--align_only is incompatible with --no_align")
+        if (transcript_text is None) == (transcript_file is None):
+            parser.error("--align_only requires exactly one of --transcript_text or --transcript_file")
+        if transcript_file is not None:
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+        transcript_text = (transcript_text or "").strip()
+        if not transcript_text:
+            parser.error("Transcript provided to --align_only is empty")
+        if args["language"] is None:
+            parser.error("--align_only requires --language so we know which alignment model to load")
+        if len(audio_paths) != 1:
+            parser.error("--align_only currently supports exactly one audio file per invocation")
+
+        audio_path = audio_paths[0]
         audio = load_audio(audio_path)
-        # >> VAD & ASR
-        logger.info("Performing transcription...")
-        result: TranscriptionResult = model.transcribe(
-            audio,
-            batch_size=batch_size,
-            chunk_size=chunk_size,
-            print_progress=print_progress,
-            verbose=verbose,
+        duration = float(audio.shape[-1]) / SAMPLE_RATE
+        logger.info(f"--align_only: skipping Whisper, aligning {len(transcript_text)} chars over {duration:.2f}s of audio")
+        result: TranscriptionResult = {
+            "segments": [{"start": 0.0, "end": duration, "text": transcript_text}],
+            "language": args["language"],
+        }
+        results = [(result, audio_path)]
+    else:
+        # Part 1: VAD & ASR Loop
+        results = []
+        model = load_model(
+            model_name,
+            device=device,
+            device_index=device_index,
+            download_root=model_dir,
+            compute_type=compute_type,
+            language=args["language"],
+            asr_options=asr_options,
+            vad_method=vad_method,
+            vad_options={
+                "chunk_size": chunk_size,
+                "vad_onset": vad_onset,
+                "vad_offset": vad_offset,
+            },
+            task=task,
+            local_files_only=model_cache_only,
+            threads=faster_whisper_threads,
+            use_auth_token=hf_token,
         )
-        results.append((result, audio_path))
 
-    # Unload Whisper and VAD
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
+        audio = None
+        for audio_path in audio_paths:
+            audio = load_audio(audio_path)
+            # >> VAD & ASR
+            logger.info("Performing transcription...")
+            result: TranscriptionResult = model.transcribe(
+                audio,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                print_progress=print_progress,
+                verbose=verbose,
+            )
+            results.append((result, audio_path))
+
+        # Unload Whisper and VAD
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Part 2: Align Loop
     if not no_align:
