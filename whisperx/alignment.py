@@ -84,6 +84,23 @@ DEFAULT_ALIGN_MODELS_HF = {
 }
 
 
+def _patch_dynamic_linear_reduce_range(model: torch.nn.Module) -> None:
+    import types
+    try:
+        DynLinear = torch.ao.nn.quantized.dynamic.Linear
+    except AttributeError:
+        return
+
+    def _forward(self, x):
+        return torch.ops.quantized.linear_dynamic(
+            x, self._packed_params._packed_params, reduce_range=False
+        )
+
+    for module in model.modules():
+        if isinstance(module, DynLinear):
+            module.forward = types.MethodType(_forward, module)
+
+
 def load_align_model(
     language_code: str,
     device: str,
@@ -145,6 +162,12 @@ def load_align_model(
                 align_model = torch.ao.quantization.quantize_dynamic(
                     align_model, {torch.nn.Linear}, dtype=torch.qint8,
                 )
+                if torch.backends.quantized.engine == "qnnpack":
+                    # qnnpack ignores reduce_range=True (the hardcoded default
+                    # in torch.ao.nn.quantized.dynamic.Linear) and emits a
+                    # warning on every forward. Patch the forward to pass
+                    # reduce_range=False explicitly.
+                    _patch_dynamic_linear_reduce_range(align_model)
                 logger.info("Applied dynamic int8 quantization to align model (Linear layers)")
             except Exception as e:
                 logger.warning(f"Failed to apply dynamic quantization to align model: {e}")
