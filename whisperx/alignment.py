@@ -5,14 +5,13 @@ C. Max Bain
 from dataclasses import dataclass
 from typing import Iterable, Optional, Union, List
 
+import re
+
 import numpy as np
 import torch
-import torchaudio
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import warnings
 
 from whisperx.audio import SAMPLE_RATE, load_audio
-from whisperx.utils import PUNKT_LANGUAGES
 from whisperx.schema import (
     AlignedTranscriptionResult,
     SingleSegment,
@@ -21,8 +20,6 @@ from whisperx.schema import (
     SegmentData,
     ProgressCallback,
 )
-import nltk
-from nltk.data import load as nltk_load
 from whisperx.log_utils import get_logger
 
 try:
@@ -35,6 +32,21 @@ except ImportError:
 logger = get_logger(__name__)
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in _SENTENCE_BOUNDARY.finditer(text):
+        end = match.start()
+        if end > start:
+            spans.append((start, end))
+        start = match.end()
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans or [(0, len(text))]
 
 DEFAULT_ALIGN_MODELS_TORCH = {
     "en": "WAV2VEC2_ASR_BASE_960H",
@@ -121,6 +133,8 @@ def load_align_model(
                          f"then pass the model name via --align_model [MODEL_NAME]")
             raise ValueError(f"No default align-model for language: {language_code}")
 
+    import torchaudio
+
     if model_name in torchaudio.pipelines.__all__:
         pipeline_type = "torchaudio"
         bundle = torchaudio.pipelines.__dict__[model_name]
@@ -128,6 +142,8 @@ def load_align_model(
         labels = bundle.get_labels()
         align_dictionary = {c.lower(): i for i, c in enumerate(labels)}
     else:
+        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
         try:
             processor = Wav2Vec2Processor.from_pretrained(model_name, cache_dir=model_dir, local_files_only=model_cache_only)
             align_model = Wav2Vec2ForCTC.from_pretrained(model_name, cache_dir=model_dir, local_files_only=model_cache_only)
@@ -264,14 +280,7 @@ def align(
 
         clean_wdx = list(range(len(per_word)))
 
-        # Use language-specific Punkt model if available otherwise we fallback to English.
-        punkt_lang = PUNKT_LANGUAGES.get(model_lang, 'english')
-        try:
-            sentence_splitter = nltk_load(f'tokenizers/punkt_tab/{punkt_lang}.pickle')
-        except LookupError:
-            nltk.download('punkt_tab', quiet=True)
-            sentence_splitter = nltk_load(f'tokenizers/punkt_tab/{punkt_lang}.pickle')
-        sentence_spans = list(sentence_splitter.span_tokenize(text))
+        sentence_spans = _sentence_spans(text)
 
         segment_data[sdx] = {
             "clean_char": clean_char,
