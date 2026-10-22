@@ -16,6 +16,7 @@ from time import perf_counter
 from urllib.request import urlopen
 
 import ctranslate2
+from nltk.metrics.distance import edit_distance
 import onnxruntime
 import torch
 import whisperx
@@ -26,6 +27,10 @@ from whisperx.vads.silero import Silero
 FIXTURE = "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/tests/jfk.flac"
 FIXTURE_SHA256 = "63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715"
 SILERO_REVISION = "fba061dc5559f696e62171e9a0741782b0fdc23c"
+FIXTURE_WORDS = (
+    "and so my fellow americans ask not what your country can do for you "
+    "ask what you can do for your country"
+).split()
 
 
 def main():
@@ -87,10 +92,16 @@ def main():
             raise RuntimeError(f"Empty or incomplete {name} transcription: {text}")
         assert [s["start"] for s in segments] == sorted(s["start"] for s in segments)
         assert model.previous_batch_context_tokens == []
+        result[name] = {"seconds": round(perf_counter() - started, 3), "text": text}
         if args.audio is None:
             normalized = " ".join(re.sub(r"[^a-z ]", "", text.lower()).split())
-            assert "ask not what your country" in normalized, text
-        result[name] = {"seconds": round(perf_counter() - started, 3), "text": text}
+            # Check the whole utterance. Tiny/int8 decoding across five-second
+            # boundaries can vary by a few words between CPU implementations.
+            word_error_rate = edit_distance(FIXTURE_WORDS, normalized.split()) / len(FIXTURE_WORDS)
+            result[name]["word_error_rate"] = word_error_rate
+            max_word_error_rate = 0.25 if interleaved else 0.10
+            result[name]["max_word_error_rate"] = max_word_error_rate
+            assert word_error_rate <= max_word_error_rate, f"{name} WER {word_error_rate:.1%}: {text}"
     started = perf_counter()
     alignment_model, metadata = whisperx.load_align_model(
         args.language, args.device, quantize=args.device == "cpu")
