@@ -55,10 +55,8 @@ This repository provides fast automatic speech recognition (70x realtime with la
 
 - 1st place at [Ego4d transcription challenge](https://eval.ai/web/challenges/challenge-page/1637/leaderboard/3931/WER) 🏆
 - _WhisperX_ accepted at INTERSPEECH 2023
-- v3 transcript segment-per-sentence: using nltk sent_tokenize for better subtitlting & better diarization
 - v3 released, 70x speed-up open-sourced. Using batched whisper with [faster-whisper](https://github.com/guillaumekln/faster-whisper) backend!
-- v2 released, code cleanup, imports whisper library VAD filtering is now turned on by default, as in the paper.
-- Paper drop🎓👨‍🏫! Please see our [ArxiV preprint](https://arxiv.org/abs/2303.00747) for benchmarking and details of WhisperX. We also introduce more efficient batch inference resulting in large-v2 with \*60-70x REAL TIME speed.
+- Context-Aware Batching Released 2026: We successfully enable condition_on_previous_context within our batched transcription framework, improving punctuation and proper noun adherence. See our [ArXiv preprint](https://arxiv.org/abs/2608.31170).
 
 <h2 align="left" id="setup">Setup ⚙️</h2>
 
@@ -121,6 +119,17 @@ and Hugging Face Hub 0.x; their newer major versions require an API migration.
 
 You may also need to install ffmpeg, rust etc. Follow openAI instructions here https://github.com/openai/whisper#setup.
 
+### Accelerated Forced Alignment
+
+This fork uses a compiled Rust extension for CTC alignment, including timestamp
+interpolation, and batches the wav2vec2 forward pass. Rust is required when
+building from source; Numba is not needed.
+
+The default alignment models use `torchaudio.pipelines` when available. If
+Torchaudio cannot load, their Hugging Face equivalents are selected instead.
+The `align-torch` extra declares the direct Torchaudio dependency; Pyannote may
+also install it transitively.
+
 ### Speaker Diarization
 
 To **enable Speaker Diarization**, include your Hugging Face access token (read) that you can generate from [Here](https://huggingface.co/settings/tokens) after the `--hf_token` argument and accept the user agreement for the [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) model.
@@ -148,6 +157,13 @@ For increased timestamp accuracy, at the cost of higher gpu mem, use bigger mode
 To label the transcript with speaker ID's (set number of speakers if known e.g. `--min_speakers 2` `--max_speakers 2`):
 
     whisperx path/to/audio.wav --model large-v2 --diarize --highlight_words True
+
+To maintain continuous context (ideal for technical language / punctuation), set interleaved_context=True:
+
+    whisperx path/to/audio.wav --model large-v2 --interleaved_context
+
+Context is disabled by default. It groups equal prompt lengths for CTranslate2
+and reprocesses stream boundaries, so it can take longer than standard batching.
 
 To run on CPU instead of GPU (and for running on Mac OS X):
 
@@ -188,7 +204,9 @@ model = whisperx.load_model("large-v2", device, compute_type=compute_type)
 # model = whisperx.load_model("large-v2", device, compute_type=compute_type, download_root=model_dir)
 
 audio = whisperx.load_audio(audio_file)
+
 result = model.transcribe(audio, batch_size=batch_size)
+# To enable context between batches, add interleaved_context=True.
 print(result["segments"]) # before alignment
 
 # delete model if low on GPU resources
@@ -316,5 +334,16 @@ If you use this in your research, please cite the paper:
   author={Bain, Max and Huh, Jaesung and Han, Tengda and Zisserman, Andrew},
   journal={INTERSPEECH 2023},
   year={2023}
+}
+```
+
+Please also cite the paper below if you enabled interleaved context:
+
+```bibtex
+@article{bain2026context,
+  title={Context-Aware Interleaved Batching for WhisperX},
+  author={Bain, Carlos and Bain, Max},
+  journal={arXiv preprint arXiv:2608.31170v1},
+  year={2026}
 }
 ```

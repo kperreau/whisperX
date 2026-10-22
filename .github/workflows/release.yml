@@ -16,7 +16,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write  # bump commit, tag push, and Release publish all need this
+  contents: read
 
 concurrency:
   group: release
@@ -25,37 +25,42 @@ concurrency:
 jobs:
   bump:
     name: Bump version + tag
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.compute.outputs.new_version }}
       tag: ${{ steps.compute.outputs.tag }}
       sha: ${{ steps.commit.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           version: "0.13.5"
 
       - name: Compute next version
         id: compute
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
           current=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           IFS=. read -r MAJ MIN PAT <<<"$current"
-          case "${{ inputs.bump }}" in
+          case "$BUMP" in
             patch) PAT=$((PAT + 1));;
             minor) MIN=$((MIN + 1)); PAT=0;;
             major) MAJ=$((MAJ + 1)); MIN=0; PAT=0;;
-            *)     echo "unknown bump kind: ${{ inputs.bump }}"; exit 1;;
+            *)     echo "unknown bump kind: $BUMP"; exit 1;;
           esac
           new="${MAJ}.${MIN}.${PAT}"
           echo "current=$current"
@@ -82,22 +87,29 @@ jobs:
 
       - name: Commit, tag, push
         id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.compute.outputs.tag }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
         if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
+          gh auth setup-git
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml uv.lock
-          git commit -m "chore: release ${{ steps.compute.outputs.tag }}"
-          git tag -a "${{ steps.compute.outputs.tag }}" -m "Release ${{ steps.compute.outputs.tag }}"
-          git push origin HEAD:${{ github.ref_name }}
-          git push origin "${{ steps.compute.outputs.tag }}"
+          git commit -m "chore: release $RELEASE_TAG"
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+          git push origin "HEAD:$RELEASE_BRANCH"
+          git push origin "$RELEASE_TAG"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Dry-run summary
+        env:
+          RELEASE_TAG: ${{ steps.compute.outputs.tag }}
         if: ${{ inputs.dry_run }}
         run: |
-          echo "::notice::Dry run — would tag ${{ steps.compute.outputs.tag }} on $(git rev-parse HEAD)"
+          echo "::notice::Dry run — would tag $RELEASE_TAG on $(git rev-parse HEAD)"
 
   linux-x86_64:
     name: Build linux-x86_64 (py${{ matrix.python-version }})
@@ -108,23 +120,24 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           # When dry-running there is no tag yet; build from the workflow ref.
           ref: ${{ inputs.dry_run && github.ref || needs.bump.outputs.tag }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Build manylinux wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: x86_64-unknown-linux-gnu
           manylinux: "2_28"
           args: --release --out dist --interpreter python${{ matrix.python-version }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheel-linux-x86_64-py${{ matrix.python-version }}
           path: dist/*.whl
@@ -139,21 +152,22 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ inputs.dry_run && github.ref || needs.bump.outputs.tag }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Build macOS arm64 wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: aarch64-apple-darwin
           args: --release --out dist --interpreter python${{ matrix.python-version }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheel-macos-arm64-py${{ matrix.python-version }}
           path: dist/*.whl
@@ -167,7 +181,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -176,10 +190,9 @@ jobs:
         run: ls -lh dist
 
       - name: Create Release and upload wheels
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.bump.outputs.tag }}
-          name: ${{ needs.bump.outputs.tag }}
-          target_commitish: ${{ needs.bump.outputs.sha }}
-          generate_release_notes: true
-          files: dist/*.whl
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.bump.outputs.tag }}
+          RELEASE_SHA: ${{ needs.bump.outputs.sha }}
+        run: gh release create "$RELEASE_TAG" dist/*.whl --title "$RELEASE_TAG" --target "$RELEASE_SHA" --generate-notes

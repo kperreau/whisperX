@@ -239,6 +239,7 @@ fn build_subsegments(
     t1: f64,
     no_spaces: bool,
     return_char_alignments: bool,
+    interpolate_words: bool,
 ) -> Vec<SubSegment> {
     let text_len = text_chars.len();
 
@@ -337,7 +338,7 @@ fn build_subsegments(
         }
 
         // Interpolate word timestamps
-        if !sentence_words.is_empty() {
+        if interpolate_words && !sentence_words.is_empty() {
             let has_nan = sentence_words.iter().any(|w| w.start.is_nan());
             let has_val = sentence_words.iter().any(|w| !w.start.is_nan());
             if has_nan && has_val {
@@ -431,6 +432,7 @@ fn build_subsegments(
     duration,
     no_spaces,
     return_char_alignments,
+    interpolate_words = true,
 ))]
 fn align_segment<'py>(
     py: Python<'py>,
@@ -445,6 +447,7 @@ fn align_segment<'py>(
     duration: f64,
     no_spaces: bool,
     return_char_alignments: bool,
+    interpolate_words: bool,
 ) -> PyResult<Option<Vec<SubSegment>>> {
     let emission_owned = emission.as_array().to_owned();
     let num_frames = emission_owned.nrows();
@@ -498,6 +501,7 @@ fn align_segment<'py>(
             t1,
             no_spaces,
             return_char_alignments,
+            interpolate_words,
         );
 
         Some(subsegments)
@@ -513,4 +517,3 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CharSegment>()?;
     Ok(())
 }
-

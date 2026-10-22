@@ -56,6 +56,14 @@ DEFAULT_ALIGN_MODELS_TORCH = {
     "it": "VOXPOPULI_ASR_BASE_10K_IT",
 }
 
+TORCHAUDIO_PIPELINE_TO_HF = {
+    "WAV2VEC2_ASR_BASE_960H": "facebook/wav2vec2-base-960h",
+    "VOXPOPULI_ASR_BASE_10K_FR": "facebook/wav2vec2-base-10k-voxpopuli-fr",
+    "VOXPOPULI_ASR_BASE_10K_DE": "facebook/wav2vec2-base-10k-voxpopuli-de",
+    "VOXPOPULI_ASR_BASE_10K_ES": "facebook/wav2vec2-base-10k-voxpopuli-es",
+    "VOXPOPULI_ASR_BASE_10K_IT": "facebook/wav2vec2-base-10k-voxpopuli-it",
+}
+
 DEFAULT_ALIGN_MODELS_HF = {
     "ja": "jonatasgrosman/wav2vec2-large-xlsr-53-japanese",
     "zh": "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn",
@@ -113,6 +121,17 @@ def _patch_dynamic_linear_reduce_range(model: torch.nn.Module) -> None:
             module.forward = types.MethodType(_forward, module)
 
 
+def _load_torchaudio():
+    # Keep native audio libraries lazy: alignment with an already loaded model
+    # does not need them. Broken native installs can use the HF model loader.
+    try:
+        import torchaudio
+        return torchaudio
+    except Exception as error:
+        logger.warning("Torchaudio unavailable, using Hugging Face alignment models: %s", error)
+        return None
+
+
 def load_align_model(
     language_code: str,
     device: str,
@@ -133,9 +152,9 @@ def load_align_model(
                          f"then pass the model name via --align_model [MODEL_NAME]")
             raise ValueError(f"No default align-model for language: {language_code}")
 
-    import torchaudio
+    torchaudio = _load_torchaudio()
 
-    if model_name in torchaudio.pipelines.__all__:
+    if torchaudio is not None and model_name in torchaudio.pipelines.__all__:
         pipeline_type = "torchaudio"
         bundle = torchaudio.pipelines.__dict__[model_name]
         align_model = bundle.get_model(dl_kwargs={"model_dir": model_dir}).to(device)
@@ -143,6 +162,9 @@ def load_align_model(
         align_dictionary = {c.lower(): i for i, c in enumerate(labels)}
     else:
         from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
+        if torchaudio is None:
+            model_name = TORCHAUDIO_PIPELINE_TO_HF.get(model_name, model_name)
 
         try:
             processor = Wav2Vec2Processor.from_pretrained(model_name, cache_dir=model_dir, local_files_only=model_cache_only)
@@ -209,9 +231,9 @@ def align(
     """
     Align phoneme recognition predictions to known transcription.
     """
-    if interpolate_method != "nearest":
+    if interpolate_method not in {"nearest", "ignore"}:
         warnings.warn(
-            f"interpolate_method='{interpolate_method}' is deprecated, only 'nearest' is supported. "
+            f"interpolate_method='{interpolate_method}' is deprecated; use 'nearest' or 'ignore'. "
             "Falling back to 'nearest'.",
             DeprecationWarning,
             stacklevel=2,
@@ -464,6 +486,7 @@ def align(
             duration=duration,
             no_spaces=no_spaces,
             return_char_alignments=return_char_alignments,
+            interpolate_words=interpolate_method != "ignore",
         )
 
         if rust_subsegments is None:

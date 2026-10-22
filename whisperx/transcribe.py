@@ -77,6 +77,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     max_speakers: int = args.pop("max_speakers")
     diarize_model_name: str = args.pop("diarize_model")
     print_progress: bool = args.pop("print_progress")
+    interleaved_context: bool = args.pop("interleaved_context", False)
     return_speaker_embeddings: bool = args.pop("speaker_embeddings")
 
     if return_speaker_embeddings and not diarize:
@@ -245,6 +246,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                 chunk_size=chunk_size,
                 print_progress=print_progress,
                 verbose=verbose,
+                interleaved_context=interleaved_context,
             )
             results.append((result, audio_path))
 
