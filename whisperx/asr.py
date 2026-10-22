@@ -348,6 +348,7 @@ class FasterWhisperPipeline(Pipeline):
                 self.options = replace(self.options, suppress_tokens=new_suppressed_tokens)
 
             segments: List[SingleSegment] = []
+            segment_token_counts = []
             total_segments = len(vad_segments)
 
             # Warn if batch_size is large relative to the number of VAD chunks
@@ -413,38 +414,51 @@ class FasterWhisperPipeline(Pipeline):
                         "avg_logprob": avg_logprob,
                     }
                 )
+                if self._use_interleaved_context:
+                    segment_token_counts.append(len(out['tokens']))
 
             if self._use_interleaved_context and vad_segments:
                 # After first pass, self.previous_batch_context_tokens contains accumulated context
                 # from multiple segments of each stream. Use this for proper wrap-around.
                 accumulated_context = [list(t) for t in self.previous_batch_context_tokens[:batch_size]]
-                # Prepare context for the wrap-around re-run:
-                # Stream 0 stays empty (very start of audio)
-                # Stream i gets context from Stream i-1's accumulated context
-                new_rerun_context = [[] for _ in range(batch_size)]
-                for i in range(1, batch_size):
-                    new_rerun_context[i] = accumulated_context[i - 1]
-                # Temporarily overwrite previous_batch_context_tokens for the re-run
-                self.previous_batch_context_tokens = new_rerun_context
-                first_batch_segments = vad_segments[:batch_size]
+                # Stream 0 already has the correct empty context. Only re-run
+                # later stream heads, using the preceding stream's history.
+                self.previous_batch_context_tokens = accumulated_context[:batch_size - 1]
+                first_batch_segments = vad_segments[1:batch_size]
 
                 # Reset last_segment_tokens_per_stream and segment index counter for interleaved context pass
                 self.last_segment_tokens_per_stream = [[] for _ in range(batch_size)]
                 self.stream_segment_indices = [0 for _ in range(batch_size)]
 
                 # Runs the model again just on 'first_batch_segments'
-                for i, out in enumerate(self.__call__(data(audio, first_batch_segments), batch_size=batch_size, num_workers=num_workers)):
+                for i, out in enumerate(self.__call__(data(audio, first_batch_segments), batch_size=batch_size, num_workers=num_workers), start=1):
                     text = out['text']
-                    # Overwrite the existing text with the new wrap-around text
                     if isinstance(text, list):
                         text = text[0]
-                    if verbose:
-                        score = out['avg_logprob']
-                        score = score[0] if isinstance(score, list) else score
-                        logger.info(f"[INTERLEAVED] Segment {i} context redo: {text[:80]} (avg_logprob={score:.3f}, original={segments[i]['avg_logprob']:.3f})")
-                    segments[i]['text'] = text
                     score = out['avg_logprob']
-                    segments[i]['avg_logprob'] = score[0] if isinstance(score, list) else score
+                    score = score[0] if isinstance(score, list) else score
+                    original = segments[i]
+                    # A short continuation can have a slightly better average
+                    # score while omitting most of an already reliable segment.
+                    # Measure retained decoder tokens, independent of language.
+                    original_confident = (
+                        self.options.log_prob_threshold is None
+                        or original['avg_logprob'] >= self.options.log_prob_threshold
+                    )
+                    truncated = len(out['tokens']) * 2 < segment_token_counts[i]
+                    use_redo = bool(text.strip()) and (
+                        not original['text'].strip() or score > original['avg_logprob']
+                    ) and not (original_confident and truncated)
+                    if verbose:
+                        logger.info(
+                            "[INTERLEAVED] Segment %d context redo %s: %s "
+                            "(avg_logprob=%.3f, original=%.3f)",
+                            i, "accepted" if use_redo else "rejected", text[:80],
+                            score, original['avg_logprob'],
+                        )
+                    if use_redo:
+                        original['text'] = text
+                        original['avg_logprob'] = score
             # Sort segments by start time to restore original order
             segments.sort(key=lambda x: x['start'])
 

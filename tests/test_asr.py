@@ -109,12 +109,13 @@ def test_interleaved_context_keeps_streams_and_redo_scores_together(pipeline, mo
         ([0, 3, 5], [[], [], []]),
         ([1, 4, 6], [[1], [4], [6]]),
         ([2], [[1, 2]]),
-        ([0, 3, 5], [[], [1, 2, 3], [4, 5]]),
+        ([3, 5], [[1, 2, 3], [4, 5]]),
     ]
     assert [s["start"] for s in result["segments"]] == list(range(7))
+    # The later retry has a lower score, so keep the first-pass text and score.
     for i in [0, 3, 5]:
-        assert result["segments"][i]["text"] == f"segment {i}, pass 4"
-        assert result["segments"][i]["avg_logprob"] == -4
+        assert result["segments"][i]["text"] == f"segment {i}, pass 1"
+        assert result["segments"][i]["avg_logprob"] == -1
     assert progress == sorted(progress)
     assert progress[-1] == 100
     assert pipeline.previous_batch_context_tokens == []
@@ -126,6 +127,41 @@ def test_interleaved_context_handles_no_speech(pipeline, monkeypatch):
                                  interleaved_context=True)
     assert result == {"segments": [], "language": "en"}
     assert pipeline.previous_batch_context_tokens == []
+
+
+@pytest.mark.parametrize("original_text,original_score,redo_text,redo_score,accept_redo", [
+    ("Ask what you can do for your country.", -0.111, "for your country.", -0.8, False),
+    ("Ask what you can do for your country.", -0.111, "for your country.", -0.108, False),
+    ("Ask what you can do for your country.", -0.111, "", 0.0, False),
+    ("Ask what you can do for your country.", -0.111, "Ask what you can do for the country.", -0.05, True),
+    ("Ask what you can do for your country.", -1.3, "for your country.", -0.108, True),
+    ("", 0.0, "Ask what you can do for your country.", -0.111, True),
+], ids=["lower-score", "truncated-higher-score", "empty-redo", "improved-redo",
+        "uncertain-original", "empty-original"])
+def test_interleaved_redo_keeps_the_better_transcription(
+    pipeline, monkeypatch, original_text, original_score, redo_text, redo_score, accept_redo,
+):
+    monkeypatch.setattr(pipeline, "preprocess", lambda audio: {
+        "inputs": torch.tensor([audio["inputs"][0]])})
+    def generate(features, tokenizer, options, previous_batch_context_tokens=None):
+        texts, scores = [], []
+        for row, context in zip(features, previous_batch_context_tokens):
+            if int(row[0]) == 4:
+                texts.append(redo_text if context else original_text)
+                scores.append(redo_score if context else original_score)
+            else:
+                texts.append("preceding speech")
+                scores.append(-0.1)
+        return {"text": texts, "avg_logprob": scores,
+                "tokens": [list(range(len(text.split()))) for text in texts]}
+
+    monkeypatch.setattr(pipeline.model, "generate_segment_batched", generate)
+    audio = np.repeat(np.arange(5, dtype=np.float32), 16000)
+    result = pipeline.transcribe(audio, batch_size=2, chunk_size=1,
+                                 interleaved_context=True)
+    last = result["segments"][-1]
+    assert last["text"] == (redo_text if accept_redo else original_text)
+    assert last["avg_logprob"] == (redo_score if accept_redo else original_score)
 
 
 @pytest.mark.parametrize("prompt_length", [224, 300])
