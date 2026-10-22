@@ -85,21 +85,23 @@ def main():
               "audio_sha256": hashlib.sha256(audio_path.read_bytes()).hexdigest()}
     for name, interleaved in (("standard", False), ("interleaved", True)):
         started = perf_counter()
-        transcript = model.transcribe(audio, batch_size=2, chunk_size=5, interleaved_context=interleaved)
+        transcript = model.transcribe(audio, batch_size=2, chunk_size=5,
+                                     interleaved_context=interleaved, verbose=True)
         segments = transcript["segments"]
         text = " ".join(s["text"] for s in segments)
         if not segments or len(text.split()) < 10:
             raise RuntimeError(f"Empty or incomplete {name} transcription: {text}")
         assert [s["start"] for s in segments] == sorted(s["start"] for s in segments)
         assert model.previous_batch_context_tokens == []
-        result[name] = {"seconds": round(perf_counter() - started, 3), "text": text}
+        result[name] = {"seconds": round(perf_counter() - started, 3), "text": text,
+                        "segments": segments}
         if args.audio is None:
             normalized = " ".join(re.sub(r"[^a-z ]", "", text.lower()).split())
             # Check the whole utterance. Tiny/int8 decoding across five-second
             # boundaries can vary by a few words between CPU implementations.
             word_error_rate = edit_distance(FIXTURE_WORDS, normalized.split()) / len(FIXTURE_WORDS)
             result[name]["word_error_rate"] = word_error_rate
-            max_word_error_rate = 0.25 if interleaved else 0.10
+            max_word_error_rate = 0.10
             result[name]["max_word_error_rate"] = max_word_error_rate
             assert word_error_rate <= max_word_error_rate, f"{name} WER {word_error_rate:.1%}: {text}"
     started = perf_counter()

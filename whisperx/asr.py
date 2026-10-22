@@ -404,7 +404,7 @@ class FasterWhisperPipeline(Pipeline):
                     avg_logprob = avg_logprob[0]
 
                 if verbose:
-                    print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
+                    print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text} (avg_logprob={avg_logprob:.3f})")
                 segments.append(
                     {
                         "text": text,
@@ -439,7 +439,9 @@ class FasterWhisperPipeline(Pipeline):
                     if isinstance(text, list):
                         text = text[0]
                     if verbose:
-                        logger.info(f"[INTERLEAVED] Segment {i} context redo:     {text[:80]}...")
+                        score = out['avg_logprob']
+                        score = score[0] if isinstance(score, list) else score
+                        logger.info(f"[INTERLEAVED] Segment {i} context redo: {text[:80]} (avg_logprob={score:.3f}, original={segments[i]['avg_logprob']:.3f})")
                     segments[i]['text'] = text
                     score = out['avg_logprob']
                     segments[i]['avg_logprob'] = score[0] if isinstance(score, list) else score
