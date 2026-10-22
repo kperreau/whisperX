@@ -8,6 +8,6 @@ name = "whisperx_ext"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.28", features = ["extension-module"] }
-numpy = "0.28"
+pyo3 = { version = "0.30.1", features = ["extension-module"] }
+numpy = "0.30.0"
 ndarray = "0.17"

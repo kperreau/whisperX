@@ -53,7 +53,7 @@ fn interpolate_nans_nearest(vals: &mut [f64]) {
 
 // ─── Python-visible result types ────────────────────────────────────────────
 
-#[pyclass(skip_from_py_object)]
+#[pyclass]
 #[derive(Clone)]
 struct WordSegment {
     #[pyo3(get)]
@@ -66,7 +66,7 @@ struct WordSegment {
     score: f64,
 }
 
-#[pyclass(skip_from_py_object)]
+#[pyclass]
 #[derive(Clone)]
 struct CharSegment {
     #[pyo3(get)]
@@ -79,7 +79,7 @@ struct CharSegment {
     score: f64,
 }
 
-#[pyclass(skip_from_py_object)]
+#[pyclass]
 #[derive(Clone)]
 struct SubSegment {
     #[pyo3(get)]
