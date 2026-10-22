@@ -43,6 +43,9 @@ def main():
                MACOSX_DEPLOYMENT_TARGET="14.0")
     if mac:
         env["ARCHFLAGS"] = "-arch arm64"
+        # setup-python uses a universal2 interpreter; the linked PyTorch and
+        # CTranslate2 libraries are arm64, so the wheel must not claim x86_64.
+        env["_PYTHON_HOST_PLATFORM"] = "macosx-14.0-arm64"
 
     def run(command, cwd=work, extra=None):
         print("+", " ".join(map(str, command)), flush=True)
