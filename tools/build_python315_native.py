@@ -172,7 +172,11 @@ def main():
                 "platform": platform.platform(), "sources": SOURCES,
                 "wheel": wheel.name, "sha256": hashlib.file_digest(wheel.open("rb"), "sha256").hexdigest(),
                 "cuda": None, "validation_target": "CPU inference"}
-    (output / f"{args.package}-build.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest_path = output / f"{args.package}-build.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    if not mac and args.package == "ctranslate2":
+        from repair_python315_notices import repair
+        repair(manifest_path)
 
 
 if __name__ == "__main__":
