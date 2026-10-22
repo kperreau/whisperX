@@ -79,6 +79,18 @@ def main():
         run(["git", "submodule", "update", "--init", "--recursive", "--depth", "1",
              *submodules], src)
         prefix = work / "prefix"
+        # setup.py lives under python/, outside the upstream LICENSE file.
+        # Include the upstream and bundled third-party notices in distributions.
+        shutil.copy2(src / "LICENSE", src / "python/LICENSE")
+        notices = []
+        for directory in [src / name for name in submodules] + [Path("/usr/share/licenses/openblas"),
+                         Path("/usr/share/licenses/libgfortran"), Path("/usr/local/cuda-12.8")]:
+            for pattern in ("LICENSE*", "COPYING*", "NOTICE*", "EULA*"):
+                for license_file in sorted(directory.glob(pattern)):
+                    if license_file.is_file():
+                        notices.append(f"\n--- {directory.name}/{license_file.name} ---\n" +
+                                       license_file.read_text(errors="replace"))
+        (src / "python/NOTICE").write_text("Third-party dependency licenses\n" + "\n".join(notices))
         options = ["-DWITH_MKL=OFF", "-DWITH_DNNL=OFF", "-DWITH_RUY=ON",
                    "-DBUILD_CLI=OFF", "-DBUILD_TESTS=OFF"]
         if mac:
@@ -86,7 +98,7 @@ def main():
         else:
             options += ["-DWITH_OPENBLAS=ON", "-DOPENBLAS_INCLUDE_DIR=/usr/include/openblas",
                         "-DOPENMP_RUNTIME=COMP",
-                        "-DWITH_CUDA=ON", "-DWITH_CUDNN=ON", "-DCUDA_DYNAMIC_LOADING=ON",
+                        "-DWITH_CUDA=ON", "-DWITH_CUDNN=OFF", "-DCUDA_DYNAMIC_LOADING=ON",
                         "-DCUDA_ARCH_LIST=Common", "-DCUDA_NVCC_FLAGS=-Xfatbin=-compress-all"]
         run(["cmake", "-S", src, "-B", work / "build", "-DCMAKE_BUILD_TYPE=Release",
              "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", f"-DCMAKE_INSTALL_PREFIX={prefix}", *options])
@@ -147,7 +159,7 @@ def main():
     manifest = {"package": args.package, "python": platform.python_version(),
                 "platform": platform.platform(), "sources": SOURCES,
                 "wheel": wheel.name, "sha256": hashlib.file_digest(wheel.open("rb"), "sha256").hexdigest(),
-                "cuda": "12.8 / cuDNN 9 (runtime test required)" if not mac and args.package == "ctranslate2" else None}
+                "cuda": "12.8, dynamic cuBLAS, native convolution (runtime test required)" if not mac and args.package == "ctranslate2" else None}
     (output / f"{args.package}-build.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
