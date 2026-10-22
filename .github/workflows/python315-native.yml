@@ -11,6 +11,16 @@ on:
         description: 'Reuse successful package builds from this run; build missing packages'
         type: string
         required: false
+      package:
+        description: 'Package to build'
+        type: choice
+        default: all
+        options: [all, ctranslate2, onnxruntime, torchaudio]
+      platform:
+        description: 'Build platform'
+        type: choice
+        default: all
+        options: [all, linux, macos]
 
 permissions:
   contents: read
@@ -25,8 +35,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
-        package: [ctranslate2, onnxruntime, torchaudio]
+        os: ${{ fromJSON(inputs.platform == 'linux' && '["ubuntu-latest"]' || inputs.platform == 'macos' && '["macos-14"]' || '["ubuntu-latest", "macos-14"]') }}
+        package: ${{ fromJSON(inputs.package && inputs.package != 'all' && format('["{0}"]', inputs.package) || '["ctranslate2", "onnxruntime", "torchaudio"]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -96,13 +106,13 @@ jobs:
   inference:
     name: Python 3.15 CPU inference (${{ matrix.os }})
     needs: native
-    if: ${{ always() && (needs.native.result == 'success' || inputs.native_run_id) }}
+    if: ${{ always() && (needs.native.result == 'success' || inputs.native_run_id) && (!inputs.package || inputs.package == 'all') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: ${{ fromJSON(inputs.platform == 'linux' && '["ubuntu-latest"]' || inputs.platform == 'macos' && '["macos-14"]' || '["ubuntu-latest", "macos-14"]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
