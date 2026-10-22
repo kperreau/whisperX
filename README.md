@@ -101,11 +101,21 @@ uvx git+https://github.com/m-bain/whisperX.git
 
 If you want to modify the code or contribute to the project:
 
+Use Python 3.14.9 (pinned in `.python-version`) and uv 0.13.5 or newer.
+Python 3.12 and 3.13 remain supported. Python 3.15 is not supported yet
+because the audio inference dependencies do not provide compatible wheels.
+
 ```bash
 git clone https://github.com/m-bain/whisperX.git
 cd whisperX
-uv sync --all-extras --dev
+uv sync --locked --extra dev
+uv run --locked --extra dev pytest tests/ -q
 ```
+
+`make install` and `make test` run the same commands. Profiling tools are
+optional: install them with `uv sync --locked --extra dev --extra profile`.
+The lockfile records the tested dependencies, including Transformers 4.x
+and Hugging Face Hub 0.x; their newer major versions require an API migration.
 
 > **Note**: The development version may contain experimental features and bugs. Use the stable PyPI release for production environments.
 

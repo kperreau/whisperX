@@ -253,47 +253,45 @@ class FasterWhisperPipeline(Pipeline):
                     language=language,
                 )
 
-        if self.suppress_numerals:
-            previous_suppress_tokens = self.options.suppress_tokens
-            numeral_symbol_tokens = find_numeral_symbol_tokens(self.tokenizer)
-            logger.info("Suppressing numeral and symbol tokens")
-            new_suppressed_tokens = numeral_symbol_tokens + self.options.suppress_tokens
-            new_suppressed_tokens = list(set(new_suppressed_tokens))
-            self.options = replace(self.options, suppress_tokens=new_suppressed_tokens)
+        original_options = self.options
+        try:
+            if self.suppress_numerals:
+                numeral_symbol_tokens = find_numeral_symbol_tokens(self.tokenizer)
+                logger.info("Suppressing numeral and symbol tokens")
+                new_suppressed_tokens = list(dict.fromkeys(numeral_symbol_tokens + self.options.suppress_tokens))
+                self.options = replace(self.options, suppress_tokens=new_suppressed_tokens)
 
-        segments: List[SingleSegment] = []
-        batch_size = batch_size or self._batch_size
-        total_segments = len(vad_segments)
-        for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
-            if print_progress:
-                base_progress = ((idx + 1) / total_segments) * 100
-                percent_complete = base_progress / 2 if combined_progress else base_progress
-                print(f"Progress: {percent_complete:.2f}%...")
-            if progress_callback is not None:
-                progress_callback(((idx + 1) / total_segments) * 100)
-            text = out['text']
-            avg_logprob = out['avg_logprob']
-            if batch_size in [0, 1, None]:
-                text = text[0]
-                avg_logprob = avg_logprob[0]
-            if verbose:
-                print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
-            segments.append(
-                {
-                    "text": text,
-                    "start": round(vad_segments[idx]['start'], 3),
-                    "end": round(vad_segments[idx]['end'], 3),
-                    "avg_logprob": avg_logprob,
-                }
-            )
-
-        # revert the tokenizer if multilingual inference is enabled
-        if self.preset_language is None:
-            self.tokenizer = None
-
-        # revert suppressed tokens if suppress_numerals is enabled
-        if self.suppress_numerals:
-            self.options = replace(self.options, suppress_tokens=previous_suppress_tokens)
+            segments: List[SingleSegment] = []
+            batch_size = batch_size or self._batch_size
+            total_segments = len(vad_segments)
+            for idx, out in enumerate(self.__call__(data(audio, vad_segments), batch_size=batch_size, num_workers=num_workers)):
+                if print_progress:
+                    base_progress = ((idx + 1) / total_segments) * 100
+                    percent_complete = base_progress / 2 if combined_progress else base_progress
+                    print(f"Progress: {percent_complete:.2f}%...")
+                if progress_callback is not None:
+                    progress_callback(((idx + 1) / total_segments) * 100)
+                text = out['text']
+                avg_logprob = out['avg_logprob']
+                if batch_size in [0, 1, None]:
+                    text = text[0]
+                    avg_logprob = avg_logprob[0]
+                if verbose:
+                    print(f"Transcript: [{round(vad_segments[idx]['start'], 3)} --> {round(vad_segments[idx]['end'], 3)}] {text}")
+                segments.append(
+                    {
+                        "text": text,
+                        "start": round(vad_segments[idx]['start'], 3),
+                        "end": round(vad_segments[idx]['end'], 3),
+                        "avg_logprob": avg_logprob,
+                    }
+                )
+        finally:
+            # Inference and progress callbacks can fail. The next file must
+            # still get fresh language detection and the original token filters.
+            if self.preset_language is None:
+                self.tokenizer = None
+            self.options = original_options
 
         return {"segments": segments, "language": language}
 

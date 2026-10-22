@@ -1,4 +1,4 @@
-# WhisperX — venv + install + run (defaults adapted for macOS CPU)
+# WhisperX — locked uv install + run (defaults adapted for macOS CPU)
 #
 # Examples:
 #   make install
@@ -7,13 +7,12 @@
 #   make whisper ARGS="sample.wav --model large-v2 --diarize --hf_token HF_XXX"
 
 VENV        ?= .venv
-PYTHON      ?= python3
-PIP         := $(VENV)/bin/pip
+UV          ?= uv
 WHISPERX    := $(VENV)/bin/whisperx
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install run whisper clean
+.PHONY: help install test run whisper clean
 
 help: ## Show available targets
 	@echo "WhisperX Makefile"
@@ -25,12 +24,11 @@ help: ## Show available targets
 	@echo "  make run AUDIO=path/to/audio.wav"
 	@echo "  make whisper ARGS=\"audio.wav --language fr\""
 
-$(VENV)/bin/python:
-	$(PYTHON) -m venv $(VENV)
+install: ## Install locked dependencies using uv and .python-version
+	UV_PROJECT_ENVIRONMENT="$(VENV)" $(UV) sync --locked --extra dev
 
-install: $(VENV)/bin/python ## Create venv and pip install this repo (editable)
-	$(PIP) install --upgrade pip
-	$(PIP) install -e ".[dev]"
+test: ## Run tests with the locked development dependencies
+	UV_PROJECT_ENVIRONMENT="$(VENV)" $(UV) run --locked --extra dev pytest tests/ -q
 
 run: ## Transcribe AUDIO=path [-- EXTRA='optional whisperx flags']
 	@test -n "$(AUDIO)" || (echo "Usage: make run AUDIO=path/to/audio.wav [EXTRA='--language fr']"; exit 1)

@@ -15,8 +15,8 @@ class IntervalTree:
     """
     Simple interval tree for fast overlap queries using sorted array + binary search.
 
-    Uses O(n) space and provides O(log n) query time instead of O(n) linear scan.
-    This achieves ~228x speedup for speaker assignment in long-form content.
+    Uses O(n) space. Binary searches exclude finished and future intervals;
+    only the remaining candidates need to be checked for overlap.
     """
 
     def __init__(self, intervals: List[Tuple[float, float, str]]):
@@ -29,6 +29,7 @@ class IntervalTree:
         if not intervals:
             self.starts = np.array([])
             self.ends = np.array([])
+            self.max_ends = np.array([])
             self.speakers: List[str] = []
             return
 
@@ -36,6 +37,7 @@ class IntervalTree:
         sorted_intervals = sorted(intervals, key=lambda x: x[0])
         self.starts = np.array([i[0] for i in sorted_intervals], dtype=np.float64)
         self.ends = np.array([i[1] for i in sorted_intervals], dtype=np.float64)
+        self.max_ends = np.maximum.accumulate(self.ends)
         self.speakers = [i[2] for i in sorted_intervals]
 
     def query(self, start: float, end: float) -> List[Tuple[str, float]]:
@@ -49,21 +51,23 @@ class IntervalTree:
         Returns:
             List of (speaker, intersection_duration) tuples for overlapping segments
         """
-        if len(self.starts) == 0:
+        if len(self.starts) == 0 or end <= start:
             return []
 
         # Binary search to find candidate intervals
         # Only intervals with start < end could overlap
         right_idx = np.searchsorted(self.starts, end, side='left')
-        if right_idx == 0:
+        # Prefix maxima stay sorted even when speaker intervals are nested.
+        left_idx = np.searchsorted(self.max_ends, start, side='right')
+        if left_idx >= right_idx:
             return []
 
         # Check candidates for actual overlap
-        candidates = slice(0, right_idx)
-        overlaps = (self.starts[candidates] < end) & (self.ends[candidates] > start)
+        candidates = slice(left_idx, right_idx)
+        overlaps = self.ends[candidates] > start
 
         results = []
-        for idx in np.where(overlaps)[0]:
+        for idx in np.flatnonzero(overlaps) + left_idx:
             intersection = min(self.ends[idx], end) - max(self.starts[idx], start)
             if intersection > 0:
                 results.append((self.speakers[idx], intersection))
@@ -82,9 +86,10 @@ class IntervalTree:
         if len(self.starts) == 0:
             return None
 
-        # Calculate midpoints of all segments
-        mids = (self.starts + self.ends) / 2
-        nearest_idx = np.argmin(np.abs(mids - time))
+        # Distance to interval boundaries, not midpoints: a long segment can
+        # end beside the query even when its midpoint is much farther away.
+        distances = np.maximum(np.maximum(self.starts - time, time - self.ends), 0)
+        nearest_idx = np.argmin(distances)
         return self.speakers[nearest_idx]
 
 
@@ -191,8 +196,7 @@ def assign_word_speakers(
     """
     Assign speakers to words and segments in the transcript.
 
-    Uses an interval tree for O(log n) overlap queries instead of O(n) linear scan,
-    achieving ~228x speedup for long-form content (3+ hour podcasts).
+    Uses binary searches to limit overlap queries to candidate intervals.
 
     Args:
         diarize_df: Diarization dataframe from DiarizationPipeline
@@ -207,10 +211,10 @@ def assign_word_speakers(
     if not transcript_segments or diarize_df is None or len(diarize_df) == 0:
         return transcript_result
 
-    # Build interval tree from diarization segments for O(log n) queries
+    # Build the interval index once for all segment and word queries.
     intervals = [
-        (row['start'], row['end'], row['speaker'])
-        for _, row in diarize_df.iterrows()
+        (start, end, speaker)
+        for start, end, speaker in diarize_df[['start', 'end', 'speaker']].itertuples(index=False, name=None)
     ]
     tree = IntervalTree(intervals)
 

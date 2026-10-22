@@ -9,32 +9,33 @@ requires-python = ">=3.12, <3.15"
 license = { text = "BSD-2-Clause" }
 
 dependencies = [
-    "ctranslate2>=4.5.0",
-    "faster-whisper>=1.2.0",
-    "nltk>=3.9.1",
-    "numpy>=2.1.0",
-    "omegaconf>=2.3.0",
-    "pandas>=2.2.3",
-    "pyannote-audio>=4.0.0",
-    "huggingface-hub<1.0.0",
-    "torch>=2.8,<3",
-    "torchaudio>=2.8,<3",
-    "torchvision>=0.23,<1",
-    "torchcodec>=0.6.0,<1; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'darwin' or sys_platform == 'win32'",
-    "transformers>=4.48.0",
+    "ctranslate2>=4.8.3,<5",
+    "faster-whisper>=1.2.1,<2",
+    "nltk>=3.10.4,<4",
+    "numpy>=2.5.4,<3",
+    "omegaconf>=2.4.0,<3",
+    "pandas>=3.1.0,<4",
+    "pyannote-audio>=4.0.7,<5",
+    "huggingface-hub>=0.36.2,<1",
+    "torch>=2.11,<3",
+    "torchaudio>=2.11,<3",
+    "torchvision>=0.26,<1",
+    "torchcodec>=0.11.1,<1; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'darwin' or sys_platform == 'win32'",
+    # Pipeline subclasses and the bundled VAD still use the Transformers 4 / Hub 0 APIs.
+    "transformers>=4.57.6,<5",
     "triton>=3.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'" # only install triton on x86_64 Linux
 ]
 
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=9.1.1,<10"]
 profile = ["py-spy>=0.4", "scalene>=1.5"]
 
 [project.scripts]
 whisperx = "whisperx.__main__:cli"
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.15,<2"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -45,8 +46,9 @@ exclude = ["crates/whisperx_ext/target/**/*"]
 
 # torchcodec (transitive dep of pyannote-audio >=4) has no wheels for Linux aarch64
 [tool.uv]
+required-version = ">=0.13.5"
 override-dependencies = [
-    "torchcodec>=0.6.0,<1; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'darwin' or sys_platform == 'win32'",
+    "torchcodec>=0.11.1,<1; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
 
 # torch / torchaudio / torchvision now resolve from PyPI on every platform.
