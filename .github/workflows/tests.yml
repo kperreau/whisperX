@@ -47,7 +47,13 @@ jobs:
 
       - name: Install FFmpeg for speech validation
         if: matrix.python-version == '3.15' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        timeout-minutes: 10
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+            sudo apt-get "${apt_options[@]}" update
+            sudo apt-get "${apt_options[@]}" install -y ffmpeg
+          fi
 
       - name: Install FFmpeg for speech validation
         if: matrix.python-version == '3.15' && runner.os == 'macOS'
