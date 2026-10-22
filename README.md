@@ -100,9 +100,9 @@ uvx git+https://github.com/m-bain/whisperX.git
 If you want to modify the code or contribute to the project:
 
 Use Python 3.14.9 (pinned in `.python-version`) and uv 0.13.5 or newer.
-Python 3.12 and 3.13 remain supported. Python 3.15 is not supported yet:
-the stable PyTorch, CTranslate2, and ONNX Runtime releases on PyPI do not
-provide compatible wheels.
+Python 3.12 and 3.13 remain supported. Standard installation targets Python
+3.12–3.14. Python 3.15 needs native packages that are unavailable from PyPI;
+an experimental source-build recipe for Apple silicon is described below.
 
 ```bash
 git clone https://github.com/m-bain/whisperX.git
@@ -116,6 +116,34 @@ optional: install them with `uv sync --locked --extra dev --extra profile`.
 The lockfile records the tested dependencies, including Transformers 5.20.2
 and Hugging Face Hub 2.2.0. These versions support the batching pipeline,
 bundled VAD, and quantized alignment while retaining the Rust extension.
+
+#### Experimental Python 3.15.1 on Apple silicon
+
+Python 3.15 is technically usable without waiting for every dependency to
+publish PyPI wheels. PyTorch, TorchVision, and TorchCodec provide stable 3.15
+wheels through the [official PyTorch index](https://pytorch.org/blog/pytorch-2-14-release-blog/).
+CTranslate2, ONNX Runtime, and TorchAudio still require source builds. The Rust
+extension uses PyO3 0.30 and rust-numpy 0.30, which support Python 3.15.
+
+With uv, Rust, CMake, Git, and Xcode command line tools available, run:
+
+```bash
+python3 tools/build_python315_macos.py --jobs 4
+tmp/python315/venv/bin/python --version
+```
+
+The recipe creates an isolated environment under `tmp/python315`, verifies
+pinned upstream source revisions and PyTorch wheel hashes, builds the missing
+native packages, and runs the WhisperX tests. CTranslate2 retains Accelerate,
+Ruy, and int8 CPU inference. Build output is saved in that directory's log files;
+the build can take several minutes and uses substantial disk space.
+
+Only the private project copy permits Python 3.15. The regular environment and
+published package constraints remain unchanged until native package distribution
+and Linux compatibility have been validated. This recipe targets macOS arm64
+CPU inference; it does not establish CUDA, Linux, Windows, or free-threaded
+Python 3.15 support. PyTorch 2.14 also does not support `torch.compile` on 3.15;
+WhisperX does not use it.
 
 > **Note**: The development version may contain experimental features and bugs. Use the stable PyPI release for production environments.
 
