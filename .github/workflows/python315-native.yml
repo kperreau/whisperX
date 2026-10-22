@@ -7,12 +7,19 @@ on:
       - tools/build_python315_macos.py
       - .github/workflows/python315-native.yml
   workflow_dispatch:
+    inputs:
+      native_run_id:
+        description: 'Reuse native wheels from this completed workflow run (empty = rebuild)'
+        type: string
+        required: false
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   native:
+    if: ${{ !inputs.native_run_id }}
     name: ${{ matrix.package }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -29,15 +36,20 @@ jobs:
         if: runner.os == 'macOS'
         with:
           python-version: '3.15'
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        id: wheels
+        with:
+          path: dist
+          key: native315-${{ matrix.os }}-${{ matrix.package }}-${{ hashFiles('tools/build_python315_native.py', 'tools/build_python315_macos.py', '.github/workflows/python315-native.yml') }}
       - name: Build macOS wheel
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.wheels.outputs.cache-hit != 'true'
         env:
           PACKAGE: ${{ matrix.package }}
         run: |
           python -m venv /tmp/native-venv
           /tmp/native-venv/bin/python tools/build_python315_native.py "$PACKAGE" --work-dir /tmp/native-build --output-dir dist --jobs 3
       - name: Build manylinux wheel
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.wheels.outputs.cache-hit != 'true'
         env:
           PACKAGE: ${{ matrix.package }}
         run: |
@@ -68,6 +80,7 @@ jobs:
   inference:
     name: Python 3.15 CPU inference (${{ matrix.os }})
     needs: native
+    if: ${{ always() && (needs.native.result == 'success' || inputs.native_run_id) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -87,6 +100,8 @@ jobs:
           pattern: native315-*-${{ matrix.os }}
           path: dist
           merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.native_run_id || github.run_id }}
       - name: Install FFmpeg
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -104,7 +119,7 @@ jobs:
           p = Path('pyproject.toml')
           p.write_text(p.read_text().replace('>=3.12, <3.15', '>=3.12, <3.16'))
           PY
-          .venv315/bin/python -m pip install '.[dev]'
+          .venv315/bin/python -m pip install '.[dev]' --extra-index-url https://download.pytorch.org/whl/cpu
           .venv315/bin/python -m pip check
       - name: Run the tests and real audio inference
         run: |
