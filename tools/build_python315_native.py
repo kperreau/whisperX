@@ -84,12 +84,24 @@ def main():
         # Include the upstream and bundled third-party notices in distributions.
         shutil.copy2(src / "LICENSE", src / "python/LICENSE")
         notices = []
-        for directory in [src / name for name in submodules] + [Path("/usr/share/licenses/openblas"),
-                         Path("/usr/share/licenses/libgfortran")]:
+        for directory in [src / name for name in submodules]:
             for pattern in ("LICENSE*", "COPYING*", "NOTICE*", "EULA*"):
-                for license_file in sorted(directory.glob(pattern)):
+                for license_file in sorted(directory.rglob(pattern)):
                     if license_file.is_file():
-                        notices.append(f"\n--- {directory.name}/{license_file.name} ---\n" +
+                        notices.append(f"\n--- {license_file.relative_to(src)} ---\n" +
+                                       license_file.read_text(errors="replace"))
+        if not mac:
+            # manylinux RPM license directories contain version suffixes. Ask
+            # RPM for the actual paths rather than assuming unversioned paths.
+            packages = subprocess.check_output(["rpm", "-qa", "--qf", "%{NAME}\\n"], text=True).splitlines()
+            for package in sorted(p for p in packages if any(
+                    name in p for name in ("openblas", "libgfortran", "libgomp", "libquadmath"))):
+                paths = subprocess.check_output(["rpm", "-ql", package], text=True).splitlines()
+                for path in paths:
+                    license_file = Path(path)
+                    if (license_file.is_file() and license_file.name.lower().startswith(
+                            ("license", "copying", "notice", "copyright"))):
+                        notices.append(f"\n--- {package}: {path} ---\n" +
                                        license_file.read_text(errors="replace"))
         (src / "python/NOTICE").write_text("Third-party dependency licenses\n" + "\n".join(notices))
         options = ["-DWITH_MKL=OFF", "-DWITH_DNNL=OFF", "-DWITH_RUY=ON",
