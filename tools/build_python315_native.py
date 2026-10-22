@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build missing CPython 3.15 wheels from unmodified, pinned upstream sources.
 
-Linux builds run in manylinux_2_28; CTranslate2 additionally needs OpenBLAS
-and the CUDA 12.8/cuDNN 9 development packages. macOS targets Apple silicon 14+.
+Linux builds run in manylinux_2_28; CTranslate2 additionally needs OpenBLAS.
+Both platforms target CPU inference. macOS targets Apple silicon 14+.
 Each invocation builds one package so CI can isolate dependencies and artifacts.
 """
 
@@ -77,8 +77,6 @@ def main():
     src = source(args.package)
     if args.package == "ctranslate2":
         submodules = ["third_party/spdlog", "third_party/ruy", "third_party/cpu_features"]
-        if not mac:
-            submodules += ["third_party/thrust", "third_party/cutlass"]
         run(["git", "submodule", "update", "--init", "--recursive", "--depth", "1",
              *submodules], src)
         prefix = work / "prefix"
@@ -87,7 +85,7 @@ def main():
         shutil.copy2(src / "LICENSE", src / "python/LICENSE")
         notices = []
         for directory in [src / name for name in submodules] + [Path("/usr/share/licenses/openblas"),
-                         Path("/usr/share/licenses/libgfortran"), Path("/usr/local/cuda-12.8")]:
+                         Path("/usr/share/licenses/libgfortran")]:
             for pattern in ("LICENSE*", "COPYING*", "NOTICE*", "EULA*"):
                 for license_file in sorted(directory.glob(pattern)):
                     if license_file.is_file():
@@ -100,16 +98,15 @@ def main():
             options += ["-DWITH_ACCELERATE=ON", "-DOPENMP_RUNTIME=NONE"]
         else:
             options += ["-DWITH_OPENBLAS=ON", "-DOPENBLAS_INCLUDE_DIR=/usr/include/openblas",
-                        "-DOPENMP_RUNTIME=COMP",
-                        "-DWITH_CUDA=ON", "-DWITH_CUDNN=OFF", "-DCUDA_DYNAMIC_LOADING=ON",
-                        "-DCUDA_ARCH_LIST=Common", "-DCUDA_NVCC_FLAGS=-Xfatbin=-compress-all"]
+                        "-DOPENMP_RUNTIME=COMP", "-DWITH_CUDA=OFF", "-DWITH_CUDNN=OFF"]
         run(["cmake", "-S", src, "-B", work / "build", "-DCMAKE_BUILD_TYPE=Release",
              "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", f"-DCMAKE_INSTALL_PREFIX={prefix}", *options])
         run(["cmake", "--build", work / "build", "--parallel", args.jobs])
         run(["cmake", "--install", work / "build"])
         run([sys.executable, "setup.py", "bdist_wheel", "--dist-dir", raw], src / "python",
             {"CTRANSLATE2_ROOT": str(prefix)})
-        env["DYLD_LIBRARY_PATH" if mac else "LD_LIBRARY_PATH"] = str(prefix / "lib")
+        env["DYLD_LIBRARY_PATH" if mac else "LD_LIBRARY_PATH"] = os.pathsep.join(
+            str(prefix / name) for name in ("lib", "lib64"))
         built = only_wheel(raw)
     elif args.package == "torchaudio":
         # PyTorch's official index, rather than PyPI, carries the stable cp315 wheels.
@@ -162,7 +159,7 @@ def main():
     manifest = {"package": args.package, "python": platform.python_version(),
                 "platform": platform.platform(), "sources": SOURCES,
                 "wheel": wheel.name, "sha256": hashlib.file_digest(wheel.open("rb"), "sha256").hexdigest(),
-                "cuda": "12.8, dynamic cuBLAS, native convolution (runtime test required)" if not mac and args.package == "ctranslate2" else None}
+                "cuda": None, "validation_target": "CPU inference"}
     (output / f"{args.package}-build.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

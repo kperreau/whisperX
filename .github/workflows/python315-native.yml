@@ -1,15 +1,14 @@
 name: Python 3.15 native dependencies
 
 on:
-  pull_request:
-    paths:
-      - tools/build_python315_native.py
-      - tools/build_python315_macos.py
-      - .github/workflows/python315-native.yml
   workflow_dispatch:
     inputs:
       native_run_id:
         description: 'Reuse native wheels from this completed workflow run (empty = rebuild)'
+        type: string
+        required: false
+      reuse_native_run_id:
+        description: 'Reuse successful package builds from this run; build missing packages'
         type: string
         required: false
 
@@ -41,27 +40,44 @@ jobs:
         with:
           path: dist
           key: native315-${{ matrix.os }}-${{ matrix.package }}-${{ hashFiles('tools/build_python315_native.py', 'tools/build_python315_macos.py', '.github/workflows/python315-native.yml') }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        id: reused
+        if: inputs.reuse_native_run_id && steps.wheels.outputs.cache-hit != 'true'
+        continue-on-error: true
+        with:
+          name: native315-${{ matrix.package }}-${{ matrix.os }}
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_native_run_id }}
+      - name: Verify reused wheel provenance
+        if: steps.reused.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, sys
+          sys.path.insert(0, 'tools')
+          from build_python315_macos import SOURCES
+          for manifest in pathlib.Path('dist').glob('*-build.json'):
+              data = json.loads(manifest.read_text())
+              assert {k: tuple(v) for k, v in data['sources'].items()} == SOURCES
+              wheel = manifest.parent / data['wheel']
+              assert hashlib.sha256(wheel.read_bytes()).hexdigest() == data['sha256']
+          PY
       - name: Build macOS wheel
-        if: runner.os == 'macOS' && steps.wheels.outputs.cache-hit != 'true'
+        if: runner.os == 'macOS' && steps.wheels.outputs.cache-hit != 'true' && steps.reused.outcome != 'success'
         env:
           PACKAGE: ${{ matrix.package }}
         run: |
           python -m venv /tmp/native-venv
           /tmp/native-venv/bin/python tools/build_python315_native.py "$PACKAGE" --work-dir /tmp/native-build --output-dir dist --jobs 3
       - name: Build manylinux wheel
-        if: runner.os == 'Linux' && steps.wheels.outputs.cache-hit != 'true'
+        if: runner.os == 'Linux' && steps.wheels.outputs.cache-hit != 'true' && steps.reused.outcome != 'success'
         env:
           PACKAGE: ${{ matrix.package }}
         run: |
           docker run --rm -v "$PWD:/io" -w /io -e PACKAGE quay.io/pypa/manylinux_2_28_x86_64 bash -euxo pipefail -c '
             dnf upgrade -y ca-certificates
             if [ "$PACKAGE" = ctranslate2 ]; then
-              dnf install -y dnf-plugins-core openblas-devel
-              dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
-              dnf install -y cuda-nvcc-12-8-12.8.93-1 cuda-cudart-devel-12-8-12.8.90-1 libcurand-devel-12-8-10.3.9.90-1 libcublas-devel-12-8-12.8.4.1-1
-              export PATH="/usr/local/cuda-12.8/bin:$PATH"
-              export CUDACXX=/usr/local/cuda-12.8/bin/nvcc
-              export CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-12.8
+              dnf install -y openblas-devel
             fi
             /opt/python/cp315-cp315/bin/python -m venv /tmp/native-venv
             /tmp/native-venv/bin/python tools/build_python315_native.py "$PACKAGE" --work-dir /tmp/native-build --output-dir /io/dist --jobs 3
