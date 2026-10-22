@@ -41,6 +41,8 @@ def main():
     env = os.environ.copy()
     env.update(MAX_JOBS=str(args.jobs), CMAKE_BUILD_PARALLEL_LEVEL=str(args.jobs),
                MACOSX_DEPLOYMENT_TARGET="14.0")
+    if mac:
+        env["ARCHFLAGS"] = "-arch arm64"
 
     def run(command, cwd=work, extra=None):
         print("+", " ".join(map(str, command)), flush=True)
@@ -101,6 +103,11 @@ def main():
         run([sys.executable, "setup.py", "bdist_wheel", "--dist-dir", raw], src,
             {"BUILD_VERSION": "2.11.0", "USE_CUDA": "0", "USE_ROCM": "0"})
         built = only_wheel(raw)
+        if mac:
+            torch_lib = subprocess.check_output(
+                [sys.executable, "-c", "import torch,pathlib; print(pathlib.Path(torch.__file__).parent/'lib')"],
+                text=True).strip()
+            env["DYLD_LIBRARY_PATH"] = torch_lib
     else:
         pybind = source("pybind11")
         run([sys.executable, "-m", "pip", "install", "flatbuffers", "protobuf>=4.25.8",
