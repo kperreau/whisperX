@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build an experimental Python 3.15.1 CPU environment on Apple silicon.
+"""Build an isolated Python 3.15.1 CPU environment on Apple silicon.
 
 The regular project environment is untouched. Missing native wheels are built
-from pinned upstream releases, and only the private project copy accepts 3.15.
+from pinned upstream releases. For distribution wheels, use build_python315_native.py.
 """
 
 import argparse
@@ -119,6 +119,7 @@ def main():
          "cmake/external/onnx"], "ort-submodules", ort)
     run([python, "tools/ci_build/build.py", "--config", "Release", "--update", "--build",
          "--build_wheel", "--skip_tests", "--skip_submodule_sync", "--compile_no_warning_as_error",
+         "--apple_deploy_target", "14.0",
          "--parallel", args.jobs, "--cmake_generator", "Ninja", "--build_dir", work / "ort-build-isolated",
          "--cmake_extra_defines", "CMAKE_POLICY_VERSION_MINIMUM=3.5",
          "CMAKE_IGNORE_PREFIX_PATH=/opt/homebrew", "FETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER",
@@ -131,8 +132,6 @@ def main():
                         ignore=shutil.ignore_patterns("target", "__pycache__", ".pytest_cache"))
     for name in ("pyproject.toml", "README.md", "LICENSE"):
         shutil.copy2(ROOT / name, project / name)
-    metadata = project / "pyproject.toml"
-    metadata.write_text(metadata.read_text().replace(">=3.12, <3.15", ">=3.12, <3.16"))
     run([work / "venv/bin/maturin", "build", "--release", "--interpreter", python, "--out", wheels],
         "rust-build", project, {"CARGO_TARGET_DIR": str(work / "rust-target")})
     run(uv + ["pip", "install", "--python", python,

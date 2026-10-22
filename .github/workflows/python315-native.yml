@@ -142,12 +142,6 @@ jobs:
           python -m venv .venv315
           .venv315/bin/python -m pip install --upgrade 'pip>=26.2.2' 'certifi>=2026.10.19'
           .venv315/bin/python -m pip install dist/*.whl torch==2.14.1 torchvision==0.29.1 torchcodec==0.17.0 --extra-index-url https://download.pytorch.org/whl/cpu
-          # Prove compatibility before widening the published Python constraint.
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('pyproject.toml')
-          p.write_text(p.read_text().replace('>=3.12, <3.15', '>=3.12, <3.16'))
-          PY
           .venv315/bin/python -m pip install '.[dev]' --extra-index-url https://download.pytorch.org/whl/cpu
           .venv315/bin/python -m pip check
       - name: Run the tests and real audio inference

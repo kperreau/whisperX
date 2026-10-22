@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--audio", type=Path)
     parser.add_argument("--language", default="en")
+    parser.add_argument("--vad-method", choices=("silero", "pyannote"), default="silero")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not _HAS_RUST_EXT:
@@ -56,19 +57,23 @@ def main():
             raise RuntimeError("Unexpected audio fixture hash")
     audio = whisperx.load_audio(str(audio_path))
     duration = len(audio) / 16000
-    vad = Silero.__new__(Silero)
-    vad.vad_onset = 0.5
-    vad.chunk_size = 5
-    vad.vad_pipeline, utils = torch.hub.load(
-        f"snakers4/silero-vad:{SILERO_REVISION}", "silero_vad",
-        onnx=True, trust_repo=True)
-    vad.get_speech_timestamps = utils[0]
+    vad = None
+    if args.vad_method == "silero":
+        vad = Silero.__new__(Silero)
+        vad.vad_onset = 0.5
+        vad.chunk_size = 5
+        vad.vad_pipeline, utils = torch.hub.load(
+            f"snakers4/silero-vad:{SILERO_REVISION}", "silero_vad",
+            onnx=True, trust_repo=True, skip_validation=True)
+        vad.get_speech_timestamps = utils[0]
     model = whisperx.load_model("tiny", args.device, language=args.language,
                                compute_type="float16" if args.device == "cuda" else "int8",
-                               vad_model=vad, threads=2)
+                               vad_model=vad, vad_method=args.vad_method,
+                               vad_options={"chunk_size": 5}, threads=2)
     result = {"python": platform.python_version(), "platform": platform.platform(),
               "device": args.device, "gpu": torch.cuda.get_device_name() if args.device == "cuda" else None,
               "torch_cuda": torch.version.cuda, "rust_alignment": _HAS_RUST_EXT,
+              "vad_method": args.vad_method,
               "onnx_providers": onnxruntime.get_available_providers(), "duration": duration,
               "versions": {p: version(p) for p in ("torch", "torchvision", "torchaudio", "torchcodec",
                            "ctranslate2", "onnxruntime", "transformers", "huggingface-hub", "numpy")},

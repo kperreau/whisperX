@@ -92,20 +92,23 @@ These installation methods are for developers or users with specific needs. If y
 To install directly from the GitHub repository:
 
 ```bash
-uvx git+https://github.com/m-bain/whisperX.git
+uvx --python 3.14 git+https://github.com/kperreau/whisperX.git
 ```
+
+For Python 3.15, use the project installation below so uv reads the platform
+wheel sources from this fork's configuration.
 
 #### Option B: Developer Installation
 
 If you want to modify the code or contribute to the project:
 
-Use Python 3.14.9 (pinned in `.python-version`) and uv 0.13.5 or newer.
-Python 3.12 and 3.13 remain supported. Standard installation targets Python
-3.12–3.14. Python 3.15 needs native packages that are unavailable from PyPI;
-an experimental source-build recipe for Apple silicon is described below.
+Use Python 3.15.1 (pinned in `.python-version`) and uv 0.13.5 or newer.
+Python 3.12–3.14 remain supported. Python 3.15 CPU inference is supported on
+Linux x86_64 (glibc 2.28+) and macOS arm64 (macOS 14+). Use this fork for its
+Python 3.15 wheels and dependency configuration:
 
 ```bash
-git clone https://github.com/m-bain/whisperX.git
+git clone https://github.com/kperreau/whisperX.git
 cd whisperX
 uv sync --locked --extra dev
 uv run --locked --extra dev pytest tests/ -q
@@ -117,33 +120,38 @@ The lockfile records the tested dependencies, including Transformers 5.20.2
 and Hugging Face Hub 2.2.0. These versions support the batching pipeline,
 bundled VAD, and quantized alignment while retaining the Rust extension.
 
-#### Experimental Python 3.15.1 on Apple silicon
+#### Python 3.15 CPU installation
 
-Python 3.15 is technically usable without waiting for every dependency to
-publish PyPI wheels. PyTorch, TorchVision, and TorchCodec provide stable 3.15
-wheels through the [official PyTorch index](https://pytorch.org/blog/pytorch-2-14-release-blog/).
-CTranslate2, ONNX Runtime, and TorchAudio still require source builds. The Rust
-extension uses PyO3 0.30 and rust-numpy 0.30, which support Python 3.15.
+`uv sync --locked` installs the tested Python 3.15 CPU environment without
+compiling CTranslate2, ONNX Runtime, or TorchAudio. Their wheels are published
+in this fork's [native dependency release](https://github.com/kperreau/whisperX/releases/tag/python315-native-20261022),
+with SHA-256 hashes, pinned upstream source revisions, and build reports.
+PyTorch 2.14.1, TorchVision 0.29.1, and TorchCodec 0.17.0 come from the
+[official PyTorch CPU index](https://download.pytorch.org/whl/cpu/).
+The WhisperX Rust extension uses PyO3 0.30 and rust-numpy 0.30.
 
-With uv, Rust, CMake, Git, and Xcode command line tools available, run:
+For pip installations, supply both wheel locations when installing this fork:
 
 ```bash
-python3 tools/build_python315_macos.py --jobs 4
-tmp/python315/venv/bin/python --version
+python3.15 -m pip install --upgrade pip
+python3.15 -m pip install . \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  --find-links https://github.com/kperreau/whisperX/releases/expanded_assets/python315-native-20261022
 ```
 
-The recipe creates an isolated environment under `tmp/python315`, verifies
-pinned upstream source revisions and PyTorch wheel hashes, builds the missing
-native packages, and runs the WhisperX tests. CTranslate2 retains Accelerate,
-Ruy, and int8 CPU inference. Build output is saved in that directory's log files;
-the build can take several minutes and uses substantial disk space.
+The native build recipe is `tools/build_python315_native.py`; CI builds portable
+wheels on manylinux_2_28 and macOS 14. The test suite and real speech validation
+cover ASR, bundled Pyannote VAD, ONNX Silero VAD, interleaved context, quantized wav2vec2 inference,
+and Rust word alignment on both platforms. Run the speech check with:
 
-Only the private project copy permits Python 3.15. The regular environment and
-published package constraints remain unchanged until native package distribution
-and Linux compatibility have been validated. This recipe targets macOS arm64
-CPU inference; it does not establish CUDA, Linux, Windows, or free-threaded
-Python 3.15 support. PyTorch 2.14 also does not support `torch.compile` on 3.15;
-WhisperX does not use it.
+```bash
+uv run --locked --extra dev python tools/check_inference.py --output tmp/inference.json
+```
+
+Python 3.15 support in this fork covers standard CPython with the GIL and CPU
+inference on the two platforms above. Windows, Linux arm64, free-threaded
+Python, and CUDA inference have not been validated on 3.15. PyTorch 2.14 does
+not support `torch.compile` on 3.15; WhisperX does not use it.
 
 > **Note**: The development version may contain experimental features and bugs. Use the stable PyPI release for production environments.
 
