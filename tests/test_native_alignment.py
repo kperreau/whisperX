@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import pickle
 import tempfile
@@ -120,15 +121,21 @@ class AlignCacheTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Torch"):
                 align_cache.export_native_alignment(self.eager, {"type": "custom"}, Path(directory, "bad"))
 
-    def test_known_french_checkpoint_preserves_input_projection(self):
+    def test_known_french_checkpoint_preserves_sensitive_layers(self):
         metadata = {"language": "fr", "type": "torchaudio", "model_name": "VOXPOPULI_ASR_BASE_10K_FR"}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "french")
-            align_cache.export_native_alignment(self.eager, metadata, path)
+            eager = copy.deepcopy(self.eager)
+            eager.encoder.transformer.layers.extend(
+                copy.deepcopy(eager.encoder.transformer.layers[0]) for _ in range(5)
+            )
+            align_cache.export_native_alignment(eager, metadata, path)
             engine = align_cache.NativeEmissionEngine(path)
             self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
             self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
-            self.assertEqual(engine.metadata["float_prefixes"], ["encoder.feature_projection.projection"])
+            self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
+            self.assertEqual(engine.metadata["float_prefixes"],
+                             ["encoder.feature_projection.projection", "encoder.transformer.layers.5"])
 
     def test_short_segment_preserves_zero_output_length_after_padding(self):
         cached = align_cache._CachedModel(self.path, cpu_threads=1)

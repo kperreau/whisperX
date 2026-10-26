@@ -95,8 +95,8 @@ real-speech timestamp and deployment-memory tests.
 Weights use symmetric per-channel int8 scales and activations use dynamic uint8
 scales. The English Torchaudio `WAV2VEC2_ASR_BASE_960H` profile keeps its first
 encoder block in FP32 to preserve word boundaries. The French Torchaudio
-`VOXPOPULI_ASR_BASE_10K_FR` profile keeps its input projection in FP32, including
-for long narrations. Other models can select float module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
+`VOXPOPULI_ASR_BASE_10K_FR` profile keeps its input projection and encoder block
+5 in FP32 to preserve long-narration boundaries across CPU kernels. Other models can select float module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
 A one-time arithmetic probe checks full-range oneDNN products on the host CPU;
 hosts without a correct kernel use exact integer matrix multiplication instead.
 Speed depends on the CPU and kernel. Benchmark the deployment hardware.

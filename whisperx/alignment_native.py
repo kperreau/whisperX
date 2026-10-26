@@ -237,7 +237,8 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     """Bake a verified CPU int8 bundle from an unquantized Torch CTC model.
 
     Known Torchaudio checkpoints retain sensitive layers in FP32: the first
-    encoder block for English base and the input projection for French VoxPopuli.
+    encoder block for English base, and the input projection plus a middle encoder
+    block for French VoxPopuli across CPU kernels.
     Callers can explicitly choose float module prefixes for other models.
     Export never downloads a checkpoint and refuses an existing output directory.
     """
@@ -250,7 +251,8 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     if float_prefixes is None:
         profiles = {
             "WAV2VEC2_ASR_BASE_960H": ("encoder.transformer.layers.0",),
-            "VOXPOPULI_ASR_BASE_10K_FR": ("encoder.feature_projection.projection",),
+            "VOXPOPULI_ASR_BASE_10K_FR": ("encoder.feature_projection.projection",
+                                              "encoder.transformer.layers.5"),
         }
         float_prefixes = profiles.get(metadata.get("model_name"), ()) if metadata["type"] == "torchaudio" else ()
     module_names = dict(model.named_modules())
