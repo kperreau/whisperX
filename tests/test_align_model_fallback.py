@@ -34,11 +34,15 @@ def test_load_align_model_falls_back_to_hf_when_torchaudio_missing():
     fake_processor.tokenizer.get_vocab.return_value = fake_vocab
     fake_model = mock.MagicMock()
 
-    with mock.patch.object(A, "_load_torchaudio", return_value=None), mock.patch(
-        "transformers.Wav2Vec2Processor"
-    ) as proc_cls, mock.patch("transformers.Wav2Vec2ForCTC") as model_cls:
-        proc_cls.from_pretrained.return_value = fake_processor
-        model_cls.from_pretrained.return_value = fake_model
+    from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+
+    # Patch methods on resolved classes: lazy Transformers imports can replace
+    # a patched top-level class while another model class is being resolved.
+    with mock.patch.object(A, "_load_torchaudio", return_value=None), mock.patch.object(
+        Wav2Vec2Processor, "from_pretrained", return_value=fake_processor
+    ) as proc_load, mock.patch.object(
+        Wav2Vec2ForCTC, "from_pretrained", return_value=fake_model
+    ) as model_load:
 
         model, metadata = A.load_align_model(
             language_code="en", device="cpu"
@@ -48,9 +52,9 @@ def test_load_align_model_falls_back_to_hf_when_torchaudio_missing():
     assert metadata["type"] == "huggingface"
     assert metadata["dictionary"] == {c.lower(): i for c, i in fake_vocab.items()}
     # the torchaudio bundle name was remapped to the HF checkpoint
-    remapped_name = proc_cls.from_pretrained.call_args.args[0]
+    remapped_name = proc_load.call_args.args[0]
     assert remapped_name == A.TORCHAUDIO_PIPELINE_TO_HF["WAV2VEC2_ASR_BASE_960H"]
-    assert model_cls.from_pretrained.call_args.args[0] == remapped_name
+    assert model_load.call_args.args[0] == remapped_name
 
 
 @pytest.mark.parametrize("error", [ModuleNotFoundError("torchaudio"), OSError("missing native library")])

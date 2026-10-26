@@ -2,6 +2,7 @@
 
 use ndarray::Array2;
 use numpy::PyReadonlyArray2;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
@@ -243,24 +244,38 @@ fn build_subsegments(
 ) -> Vec<SubSegment> {
     let text_len = text_chars.len();
 
-    let mut cdx_to_seg: Vec<Option<usize>> = vec![None; text_len];
-    for (i, &cdx) in clean_cdx.iter().enumerate() {
-        cdx_to_seg[cdx] = Some(i);
-    }
-
     let mut char_starts: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_ends: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_scores: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_word_idx: Vec<usize> = vec![0; text_len];
+    let mut char_counts = vec![0usize; text_len];
+
+    // Several spoken characters may belong to one displayed span (e.g. 43 ->
+    // forty three). Preserve the whole interval instead of overwriting it with
+    // the last phoneme. Unmapped display characters retain missing boundaries.
+    for (i, &cdx) in clean_cdx.iter().enumerate() {
+        let seg = &char_segments[i];
+        let start = round3(seg.start as f64 * ratio + t1);
+        let end = round3(seg.end as f64 * ratio + t1);
+        if char_counts[cdx] == 0 {
+            char_starts[cdx] = start;
+            char_ends[cdx] = end;
+            char_scores[cdx] = 0.0;
+        } else {
+            char_starts[cdx] = char_starts[cdx].min(start);
+            char_ends[cdx] = char_ends[cdx].max(end);
+        }
+        char_scores[cdx] += seg.score as f64;
+        char_counts[cdx] += 1;
+    }
+    for cdx in 0..text_len {
+        if char_counts[cdx] > 0 {
+            char_scores[cdx] = round3(char_scores[cdx] / char_counts[cdx] as f64);
+        }
+    }
 
     let mut word_idx = 0usize;
     for cdx in 0..text_len {
-        if let Some(seg_i) = cdx_to_seg[cdx] {
-            let seg = &char_segments[seg_i];
-            char_starts[cdx] = round3(seg.start as f64 * ratio + t1);
-            char_ends[cdx] = round3(seg.end as f64 * ratio + t1);
-            char_scores[cdx] = round3(seg.score as f64);
-        }
         char_word_idx[cdx] = word_idx;
         if no_spaces {
             word_idx += 1;
@@ -466,6 +481,42 @@ fn align_segment<'py>(
 
     let text_chars: Vec<char> = text.chars().collect();
     let text_clean_chars: Vec<char> = text_clean.chars().collect();
+    let num_classes = emission_owned.ncols();
+    if blank_id < 0 || blank_id as usize >= num_classes {
+        return Err(PyValueError::new_err(
+            "blank_id is outside the emission vocabulary",
+        ));
+    }
+    if dict_map
+        .values()
+        .any(|&id| id < 0 || id as usize >= num_classes)
+    {
+        return Err(PyValueError::new_err(
+            "Dictionary token is outside the emission vocabulary",
+        ));
+    }
+    if clean_cdx.len() != text_clean_chars.len() || clean_cdx.iter().any(|&i| i >= text_chars.len())
+    {
+        return Err(PyValueError::new_err(
+            "clean_cdx must map every cleaned character into the displayed text",
+        ));
+    }
+    if sentence_spans
+        .iter()
+        .any(|&(start, end)| start > end || end > text_chars.len())
+    {
+        return Err(PyValueError::new_err(
+            "Sentence span is outside the displayed text",
+        ));
+    }
+    if !t1.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        return Err(PyValueError::new_err(
+            "Alignment time and positive duration must be finite",
+        ));
+    }
+    if num_frames == 0 || text_clean_chars.is_empty() {
+        return Ok(None);
+    }
 
     let result = py.detach(move || {
         let has_wildcard = text_clean_chars.iter().any(|c| !dict_map.contains_key(c));
