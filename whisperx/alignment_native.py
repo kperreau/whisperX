@@ -81,11 +81,12 @@ class Int8Linear(nn.Module):
         self.register_buffer("bias", torch.empty(out_features) if bias else None)
         self._packed = None
 
-    def prepare(self) -> None:
-        if native_int8_supported():
+    def prepare(self, *, integer_fallback: bool = False) -> None:
+        if not integer_fallback and native_int8_supported():
             self._packed = torch.ops.onednn.qlinear_prepack(self.qweight, None)
             self._weight_zero = torch.zeros(self.out_features, dtype=torch.int64)
         else:
+            self._packed = None
             # Development platforms without oneDNN (notably macOS ARM) use
             # the same integer arithmetic, with no legacy quantizer.
             self._weight_transposed = self.qweight.t().contiguous()
@@ -116,7 +117,8 @@ class Int8Linear(nn.Module):
 
 
 class _CachedModel:
-    def __init__(self, path: str, cpu_threads: int = 0, *, model_type: str = "torchaudio"):
+    def __init__(self, path: str, cpu_threads: int = 0, *, model_type: str = "torchaudio",
+                 integer_fallback: bool | None = None):
         if cpu_threads > 0 and torch.get_num_threads() != cpu_threads:
             torch.set_num_threads(cpu_threads)
         # The explicit allowlist restores model structure without executing its
@@ -127,13 +129,18 @@ class _CachedModel:
             raise RuntimeError("unsupported CPU alignment cache format")
         if cache["model_type"] != model_type:
             raise RuntimeError("CPU alignment cache model type mismatch")
-        self.model = cache["model"].requires_grad_(False).eval()
+        self.integer_fallback = not native_int8_supported() if integer_fallback is None else integer_fallback
+        self.model = cache["model"]
+        if self.integer_fallback:
+            for name, module in cache.get("integer_fallback_modules", {}).items():
+                self.model.set_submodule(name, module)
+        self.model.requires_grad_(False).eval()
         if not any(isinstance(layer, Int8Linear) for layer in self.model.modules()):
             raise RuntimeError("alignment cache contains no quantized linear layers")
         self.model_type = model_type
         for module in self.model.modules():
             if isinstance(module, Int8Linear):
-                module.prepare()
+                module.prepare(integer_fallback=self.integer_fallback)
 
     def infer(self, waveforms: torch.Tensor, lengths: torch.Tensor):
         if waveforms.device.type != "cpu":
@@ -167,8 +174,9 @@ def _verification_inputs():
         yield waveforms, lengths
 
 
-def _verify_cache(model: torch.nn.Module, path: str) -> None:
-    cached = _CachedModel(path, model_type=getattr(model, "model_type", "torchaudio"))
+def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool | None = None) -> None:
+    cached = _CachedModel(path, model_type=getattr(model, "model_type", "torchaudio"),
+                          integer_fallback=integer_fallback)
     with torch.inference_mode():
         for waveforms, lengths in _verification_inputs():
             expected, expected_lengths = model(waveforms, lengths)
@@ -190,12 +198,9 @@ def _verify_cache(model: torch.nn.Module, path: str) -> None:
                     )
 
 
-def _bake_cache(model: torch.nn.Module, model_type: str, path: str, *, float_prefixes: tuple[str, ...] = ()) -> None:
-    model.eval().cpu().float()
-    materialize_weights(model)
-    cached = copy.deepcopy(model)
+def _quantize_linears(model: nn.Module, float_prefixes: tuple[str, ...] = ()) -> int:
     count = 0
-    for name, module in list(cached.named_modules()):
+    for name, module in list(model.named_modules()):
         module._load_state_dict_pre_hooks.clear()
         module._load_state_dict_post_hooks.clear()
         if not isinstance(module, torch.nn.Linear) or any(
@@ -210,13 +215,36 @@ def _bake_cache(model: torch.nn.Module, model_type: str, path: str, *, float_pre
         replacement.weight_scale.copy_(scale)
         if module.bias is not None:
             replacement.bias.copy_(module.bias.detach())
-        cached.set_submodule(name, replacement)
+        model.set_submodule(name, replacement)
         count += 1
-    if not count:
+    return count
+
+
+def _bake_cache(model: torch.nn.Module, model_type: str, path: str, *,
+                float_prefixes: tuple[str, ...] = (),
+                integer_fallback_prefixes: tuple[str, ...] = ()) -> None:
+    model.eval().cpu().float()
+    materialize_weights(model)
+    cached = copy.deepcopy(model)
+    if not _quantize_linears(cached, float_prefixes):
         raise RuntimeError("alignment cache contains no quantized linear layers")
+    # Only the kernel-sensitive modules are duplicated. The rest of the bundle
+    # stays shared, and loading never touches unused alternative tensor pages.
+    alternatives = {}
+    for prefix in integer_fallback_prefixes:
+        alternative = copy.deepcopy(cached.get_submodule(prefix))
+        if not _quantize_linears(alternative):
+            raise RuntimeError("integer fallback profile contains no linear layers")
+        alternatives[prefix] = alternative.requires_grad_(False).eval()
     torch.save({"format": 1, "model_type": model_type,
-                "model": cached.requires_grad_(False).eval()}, path)
-    _verify_cache(_ReferenceModel(model, model_type), path)
+                "model": cached.requires_grad_(False).eval(),
+                "integer_fallback_modules": alternatives}, path)
+    reference = _ReferenceModel(model, model_type)
+    if alternatives:
+        _verify_cache(reference, path, integer_fallback=False)
+        _verify_cache(reference, path, integer_fallback=True)
+    else:
+        _verify_cache(reference, path)
 
 
 class NativeEmissionEngine(_CachedModel):
@@ -231,6 +259,8 @@ class NativeEmissionEngine(_CachedModel):
         self.receptive_field = self.metadata["receptive_field"]
         super().__init__(str(path / "model.int8.pt"), threads,
                          model_type=self.metadata["model_type"])
+        if self.integer_fallback and "integer_fallback_float_prefixes" in self.metadata:
+            self.metadata["float_prefixes"] = self.metadata["integer_fallback_float_prefixes"]
 
 
 def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None):
@@ -238,7 +268,8 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
 
     Known Torchaudio checkpoints retain sensitive layers in FP32: the first
     encoder block for English base, and the input projection plus a middle encoder
-    block for French VoxPopuli across CPU kernels.
+    block for French VoxPopuli with oneDNN. The exact integer fallback retains only
+    the French input projection; both kernel profiles are verified during export.
     Callers can explicitly choose float module prefixes for other models.
     Export never downloads a checkpoint and refuses an existing output directory.
     """
@@ -248,6 +279,7 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
         raise ValueError("Export requires a Torch torchaudio or huggingface model")
     if any(type(layer).__module__.startswith("torch.ao.nn.quantized") for layer in model.modules()):
         raise ValueError("Export requires an unquantized Torch CTC model")
+    integer_fallback_prefixes = ()
     if float_prefixes is None:
         profiles = {
             "WAV2VEC2_ASR_BASE_960H": ("encoder.transformer.layers.0",),
@@ -255,6 +287,8 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
                                               "encoder.transformer.layers.5"),
         }
         float_prefixes = profiles.get(metadata.get("model_name"), ()) if metadata["type"] == "torchaudio" else ()
+        if metadata["type"] == "torchaudio" and metadata.get("model_name") == "VOXPOPULI_ASR_BASE_10K_FR":
+            integer_fallback_prefixes = ("encoder.transformer.layers.5",)
     module_names = dict(model.named_modules())
     if any(prefix not in module_names for prefix in float_prefixes):
         raise ValueError("Float module prefix does not exist in the model")
@@ -262,12 +296,17 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     _bake_cache(model, metadata["type"], str(output_dir / "model.int8.pt"),
-                float_prefixes=tuple(float_prefixes))
+                float_prefixes=tuple(float_prefixes),
+                integer_fallback_prefixes=integer_fallback_prefixes)
     bundle_metadata = {**metadata, "type": "native-int8", "model_type": metadata["type"],
                        "format_version": 1, "stride": geometry.stride,
                        "receptive_field": geometry.receptive_field,
                        "quantization": "native-symmetric-per-channel-int8",
                        "float_prefixes": list(float_prefixes)}
+    if integer_fallback_prefixes:
+        bundle_metadata["integer_fallback_float_prefixes"] = [
+            prefix for prefix in float_prefixes if prefix not in integer_fallback_prefixes
+        ]
     (output_dir / "metadata.json").write_text(
         json.dumps(bundle_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )

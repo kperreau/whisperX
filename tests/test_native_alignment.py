@@ -130,12 +130,26 @@ class AlignCacheTest(unittest.TestCase):
                 copy.deepcopy(eager.encoder.transformer.layers[0]) for _ in range(5)
             )
             align_cache.export_native_alignment(eager, metadata, path)
-            engine = align_cache.NativeEmissionEngine(path)
-            self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
-            self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
-            self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
-            self.assertEqual(engine.metadata["float_prefixes"],
+            for fallback in (False, True):
+                engine = align_cache._CachedModel(path / "model.int8.pt", integer_fallback=fallback)
+                self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
+                self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
+                self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj,
+                                      align_cache.Int8Linear if fallback else torch.nn.Linear)
+                self.assertEqual(engine.integer_fallback, fallback)
+            with mock.patch.object(align_cache, "native_int8_supported", return_value=False):
+                engine = align_cache.NativeEmissionEngine(path)
+                self.assertEqual(engine.metadata["float_prefixes"], ["encoder.feature_projection.projection"])
+            manifest = json.loads((path / "metadata.json").read_text())
+            self.assertEqual(manifest["float_prefixes"],
                              ["encoder.feature_projection.projection", "encoder.transformer.layers.5"])
+            self.assertEqual(manifest["integer_fallback_float_prefixes"], ["encoder.feature_projection.projection"])
+            explicit = Path(directory, "explicit")
+            align_cache.export_native_alignment(eager, metadata, explicit,
+                                                float_prefixes=tuple(manifest["float_prefixes"]))
+            fallback = align_cache._CachedModel(explicit / "model.int8.pt", integer_fallback=True)
+            self.assertIsInstance(fallback.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
+
 
     def test_short_segment_preserves_zero_output_length_after_padding(self):
         cached = align_cache._CachedModel(self.path, cpu_threads=1)
