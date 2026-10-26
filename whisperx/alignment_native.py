@@ -236,8 +236,9 @@ class NativeEmissionEngine(_CachedModel):
 def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None):
     """Bake a verified CPU int8 bundle from an unquantized Torch CTC model.
 
-    The known English Torchaudio base checkpoint retains its first encoder block
-    in FP32. Callers can explicitly choose float module prefixes for other models.
+    Known Torchaudio checkpoints retain sensitive layers in FP32: the first
+    encoder block for English base and the input projection for French VoxPopuli.
+    Callers can explicitly choose float module prefixes for other models.
     Export never downloads a checkpoint and refuses an existing output directory.
     """
     from whisperx.alignment_engine import get_emission_engine
@@ -247,10 +248,11 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     if any(type(layer).__module__.startswith("torch.ao.nn.quantized") for layer in model.modules()):
         raise ValueError("Export requires an unquantized Torch CTC model")
     if float_prefixes is None:
-        float_prefixes = ("encoder.transformer.layers.0",) if (
-            metadata["type"] == "torchaudio" and
-            metadata.get("model_name") == "WAV2VEC2_ASR_BASE_960H"
-        ) else ()
+        profiles = {
+            "WAV2VEC2_ASR_BASE_960H": ("encoder.transformer.layers.0",),
+            "VOXPOPULI_ASR_BASE_10K_FR": ("encoder.feature_projection.projection",),
+        }
+        float_prefixes = profiles.get(metadata.get("model_name"), ()) if metadata["type"] == "torchaudio" else ()
     module_names = dict(model.named_modules())
     if any(prefix not in module_names for prefix in float_prefixes):
         raise ValueError("Float module prefix does not exist in the model")

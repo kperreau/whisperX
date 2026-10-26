@@ -120,6 +120,16 @@ class AlignCacheTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Torch"):
                 align_cache.export_native_alignment(self.eager, {"type": "custom"}, Path(directory, "bad"))
 
+    def test_known_french_checkpoint_preserves_input_projection(self):
+        metadata = {"language": "fr", "type": "torchaudio", "model_name": "VOXPOPULI_ASR_BASE_10K_FR"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "french")
+            align_cache.export_native_alignment(self.eager, metadata, path)
+            engine = align_cache.NativeEmissionEngine(path)
+            self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
+            self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
+            self.assertEqual(engine.metadata["float_prefixes"], ["encoder.feature_projection.projection"])
+
     def test_short_segment_preserves_zero_output_length_after_padding(self):
         cached = align_cache._CachedModel(self.path, cpu_threads=1)
         _, lengths = cached.infer(torch.zeros(2, 400), torch.tensor([1, 0]))
