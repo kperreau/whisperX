@@ -143,7 +143,18 @@ def load_align_model(
     quantize: bool = False,
     engine: str = "torch",
     onnx_threads: int = 0,
+    cpu_threads: int = 0,
 ):
+    if engine == "native-int8":
+        from whisperx.alignment_native import NativeEmissionEngine
+        if device != "cpu":
+            raise ValueError("Native int8 alignment supports device='cpu' only")
+        if model_name is None:
+            raise ValueError("Native int8 alignment requires model_name pointing to a local bundle")
+        backend = NativeEmissionEngine(model_name, threads=cpu_threads)
+        if backend.metadata["language"] != language_code:
+            raise ValueError("Native int8 bundle language does not match requested language")
+        return backend, backend.metadata
     if engine == "onnx":
         from whisperx.alignment_engine import OnnxEmissionEngine
         if device != "cpu":

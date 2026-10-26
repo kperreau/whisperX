@@ -67,6 +67,45 @@ The CLI defaults to float: measured dynamic int8 is slower on this ARM CPU and
 exceeds the French timestamp drift budget. Explicit `--align_quantize True`
 remains available after validation on the target CPU.
 
+## Cached native CPU inference
+
+`native-int8` bundles store ordinary integer/float weights and model structure.
+They use native Torch convolution/attention and oneDNN linear kernels, without
+TorchScript or deprecated PyTorch QTensor creation. Loading uses memory mapping
+and a weights-only unpickler with an explicit allowlist of model classes. It
+does not construct a model, quantize weights or contact a model hub at startup.
+
+```python
+from whisperx.alignment_native import export_native_alignment
+
+model, metadata = whisperx.load_align_model("en", "cpu", quantize=False)
+export_native_alignment(model, metadata, "/tmp/en-native")
+engine, metadata = whisperx.load_align_model(
+    "en", "cpu", engine="native-int8", model_name="/tmp/en-native", cpu_threads=2,
+)
+result = whisperx.align(segments, engine, metadata, audio, "cpu", chunk_seconds=None)
+```
+
+Export refuses an existing directory and writes the manifest after verification.
+Each valid batch item must preserve frame counts, produce finite emissions and
+remain within 0.1 nat/frame of the source FP32 CTC posterior on fixed short,
+variable-duration and unequal-length inputs. This numerical check does not replace
+real-speech timestamp and deployment-memory tests.
+
+Weights use symmetric per-channel int8 scales and activations use dynamic uint8
+scales. The English Torchaudio `WAV2VEC2_ASR_BASE_960H` profile keeps its first
+encoder block in FP32 to preserve word boundaries. Other models can select float
+module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
+A one-time arithmetic probe checks full-range oneDNN products on the host CPU;
+hosts without a correct kernel use exact integer matrix multiplication instead.
+Speed depends on the CPU and kernel. Benchmark the deployment hardware.
+
+Rebuild bundles when changing the pinned Torch, TorchAudio or Transformers stack.
+CPU cache format version 1 is independent of ONNX bundles. The CLI accepts
+`--align_engine native-int8 --align_model /tmp/en-native`; pass
+`--align_chunk_seconds 0` for full context. The benchmark helper accepts
+`--native-int8 /tmp/en-native` alongside its existing Torch/ONNX variants.
+
 ## Spoken text, displayed text and diagnostics
 
 The application supplies the actual pronunciation; WhisperX does not infer how

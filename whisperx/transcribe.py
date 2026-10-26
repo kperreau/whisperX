@@ -264,7 +264,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         results = []
         align_model, align_metadata = load_align_model(
             align_language, device, model_name=align_model, model_dir=model_dir, model_cache_only=model_cache_only,
-            quantize=align_quantize, engine=align_engine, onnx_threads=faster_whisper_threads,
+            quantize=align_quantize, engine=align_engine, onnx_threads=faster_whisper_threads, cpu_threads=faster_whisper_threads,
         )
         for result, audio_path in tmp_results:
             # >> Align
@@ -282,7 +282,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                     )
                     align_model, align_metadata = load_align_model(
                         result["language"], device, model_dir=model_dir, model_cache_only=model_cache_only,
-                        quantize=align_quantize, engine=align_engine, onnx_threads=faster_whisper_threads,
+                        quantize=align_quantize, engine=align_engine, onnx_threads=faster_whisper_threads, cpu_threads=faster_whisper_threads,
                         model_name=align_bundle if align_engine == "onnx" else None,
                     )
                 logger.info("Performing alignment...")
