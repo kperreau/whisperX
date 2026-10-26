@@ -6,6 +6,25 @@ import pytest
 from whisperx_ext.alignment import align_segment
 
 
+@pytest.mark.parametrize('changes', [
+    {'blank_id': 4}, {'model_dictionary': {'a': 4}}, {'clean_cdx': [4]},
+    {'clean_cdx': []}, {'sentence_spans': [(0, 4)]}, {'sentence_spans': [(1, 0)]},
+    {'duration': 0}, {'t1': float('nan')},
+])
+def test_native_alignment_rejects_invalid_indices_without_panicking(changes):
+    arguments = dict(emission=np.zeros((2, 2), np.float32), text='a', text_clean='a',
+                     model_dictionary={'a': 1}, clean_cdx=[0], sentence_spans=[(0, 1)],
+                     blank_id=0, t1=0., duration=1., no_spaces=False, return_char_alignments=False)
+    arguments.update(changes)
+    with pytest.raises(ValueError):
+        align_segment(**arguments)
+
+
+def test_native_empty_transcript_has_no_alignment():
+    assert align_segment(np.zeros((2, 2), np.float32), '', '', {}, [], [], 0,
+                         0., 1., False, False) is None
+
+
 @pytest.mark.parametrize("interpolate_words", [True, False])
 def test_native_alignment_can_preserve_missing_word_timestamps(interpolate_words):
     emission = np.full((20, 4), -5, dtype=np.float32)

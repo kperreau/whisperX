@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
+from numbers import Integral
 from pathlib import Path
 from typing import Protocol
 
@@ -82,8 +84,26 @@ class OnnxEmissionEngine:
 def get_emission_engine(model, metadata) -> EmissionEngine:
     if metadata["type"] in {"onnx", "custom"}:
         return model
-    return TorchEmissionEngine(model, metadata["type"],
-                               metadata.get("stride", 320), metadata.get("receptive_field", 400))
+    stride, receptive_field = 320, 400
+    if metadata["type"] == "huggingface":
+        config = getattr(model, "config", None)
+        kernels = getattr(config, "conv_kernel", None)
+        strides = getattr(config, "conv_stride", None)
+        if isinstance(kernels, (tuple, list)) and isinstance(strides, (tuple, list)):
+            if not kernels or len(kernels) != len(strides):
+                raise ValueError("Invalid Hugging Face convolution geometry")
+            stride, receptive_field = 1, 1
+            for kernel, step in zip(kernels, strides):
+                if not isinstance(kernel, Integral) or not isinstance(step, Integral) or min(kernel, step) < 1:
+                    raise ValueError("Convolution kernels and strides must be positive integers")
+                receptive_field += (kernel - 1) * stride
+                stride *= step
+            if getattr(config, "add_adapter", False) is True:
+                # Padded adapter convolutions preserve the initial frame and
+                # apply ceil(length / stride), matching this frame-count grid.
+                stride *= config.adapter_stride ** config.num_adapter_layers
+    return TorchEmissionEngine(model, metadata["type"], metadata.get("stride", stride),
+                               metadata.get("receptive_field", receptive_field))
 
 
 def infer_emissions(waveforms, engine: EmissionEngine, device, *, batch_size=8,
@@ -96,13 +116,18 @@ def infer_emissions(waveforms, engine: EmissionEngine, device, *, batch_size=8,
     max_batch_seconds limits padded samples per forward, independently of size.
     A chunk can differ from a full-context forward: benchmark word boundaries.
     """
-    if batch_size < 1 or max_batch_seconds <= 0 or context_seconds < 0:
+    if (not isinstance(batch_size, Integral) or batch_size < 1 or
+            not math.isfinite(max_batch_seconds) or max_batch_seconds <= 0 or
+            not math.isfinite(context_seconds) or context_seconds < 0):
         raise ValueError("batch_size/max_batch_seconds must be positive and context_seconds nonnegative")
     stride, receptive = engine.stride, engine.receptive_field
-    if chunk_seconds is not None and chunk_seconds * SAMPLE_RATE < receptive:
+    if not all(isinstance(value, Integral) and value > 0 for value in (stride, receptive)):
+        raise ValueError("Engine stride and receptive_field must be positive integers")
+    if chunk_seconds is not None and (not math.isfinite(chunk_seconds) or chunk_seconds * SAMPLE_RATE < receptive):
         raise ValueError("chunk_seconds is shorter than the model receptive field")
     core_frames = max(1, int(chunk_seconds * SAMPLE_RATE) // stride) if chunk_seconds else None
     context_frames = int(context_seconds * SAMPLE_RATE) // stride
+    waveforms = list(waveforms)
     jobs = []
     whole_waveforms = set()
     parts = [[] for _ in waveforms]
@@ -143,15 +168,31 @@ def infer_emissions(waveforms, engine: EmissionEngine, device, *, batch_size=8,
             padded = torch.nn.utils.rnn.pad_sequence([j[-1] for j in batch], batch_first=True).to(device)
             lengths = torch.tensor([j[-1].numel() for j in batch], device=device)
             logits, output_lengths = engine.infer(padded, lengths)
+            if (not torch.is_tensor(logits) or logits.ndim != 3 or
+                    logits.shape[0] != len(batch) or min(logits.shape[1:]) < 1):
+                raise ValueError("Emission engine must return nonempty batch × frames × vocabulary logits")
+            if output_lengths is None:
+                output_lengths = [logits.shape[1]] * len(batch)
+            else:
+                output_lengths = torch.as_tensor(output_lengths)
+                if (output_lengths.ndim != 1 or len(output_lengths) != len(batch) or
+                        output_lengths.dtype not in {torch.int32, torch.int64}):
+                    raise ValueError("Emission output lengths must contain one integer per batch item")
+                output_lengths = output_lengths.cpu().tolist()
             probabilities = logits.float().log_softmax(-1).cpu()
             for bi, (index, start, left, right, _) in enumerate(batch):
-                available = probabilities.shape[1] if output_lengths is None else int(output_lengths[bi])
+                available = output_lengths[bi]
+                if not 0 < available <= probabilities.shape[1]:
+                    raise ValueError("Emission output length must be positive and fit the logits frame dimension")
                 if index in whole_waveforms:
                     right = available
                 if right > available:
                     raise ValueError(f"Emission engine returned {available} frames; expected at least {right}")
                 # Copy: retaining a view would retain the full padded batch.
-                parts[index].append((start, probabilities[bi, left:right].numpy().copy()))
+                emission = probabilities[bi, left:right].numpy().copy()
+                if np.isnan(emission).any():
+                    raise ValueError("Emission engine returned invalid CTC probabilities (NaN)")
+                parts[index].append((start, emission))
     return [np.concatenate([part for _, part in sorted(items)], axis=0) for items in parts]
 
 

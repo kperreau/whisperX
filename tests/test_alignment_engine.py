@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from whisperx.alignment_engine import TorchEmissionEngine, infer_emissions
+from whisperx.alignment_engine import TorchEmissionEngine, get_emission_engine, infer_emissions
 from whisperx.alignment import align, load_align_model
 from whisperx.alignment_text import prepare_alignment_text
 
@@ -63,6 +63,41 @@ def test_hf_exact_lengths_and_attention_mask():
     _, lengths = TorchEmissionEngine(model, 'huggingface').infer(torch.zeros(2, 16000), torch.tensor([16000, 400]))
     assert lengths.tolist() == [49, 1]
     assert model.call_args.kwargs['attention_mask'].sum(1).tolist() == [16000, 400]
+
+
+@pytest.mark.parametrize('adapter', [False, True])
+def test_hf_custom_convolution_grid_preserves_chunk_frames(adapter):
+    from transformers import Wav2Vec2Config, Wav2Vec2ForCTC
+
+    config = Wav2Vec2Config(
+        hidden_size=8, output_hidden_size=8, num_hidden_layers=0, num_attention_heads=2,
+        intermediate_size=16, conv_dim=(4, 4), conv_kernel=(5, 3), conv_stride=(4, 2),
+        feat_extract_norm='layer', num_conv_pos_embeddings=4, num_conv_pos_embedding_groups=2,
+        vocab_size=4, mask_time_prob=0, add_adapter=adapter, num_adapter_layers=2,
+    )
+    torch.manual_seed(21)
+    model = Wav2Vec2ForCTC(config).eval()
+    engine = get_emission_engine(model, {'type': 'huggingface'})
+    assert engine.receptive_field == 13
+    assert engine.stride == (32 if adapter else 8)
+    waveform = torch.randn(5003)
+    full = infer_emissions([waveform], engine, 'cpu', chunk_seconds=None)[0]
+    chunked = infer_emissions(iter([waveform]), engine, 'cpu', chunk_seconds=.05, context_seconds=.01)[0]
+    assert len(chunked) == int(model._get_feat_extract_output_lengths(torch.tensor([len(waveform)]))[0])
+    np.testing.assert_allclose(chunked, full, atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.parametrize('logits, lengths', [
+    (torch.zeros(1, 1, 2), [0]), (torch.zeros(1, 1, 2), [-1]),
+    (torch.zeros(1, 1, 2), [2]), (torch.zeros(1, 1, 2), [1.5]),
+    (torch.zeros(1, 1, 2), [1, 1]), (torch.zeros(2, 1, 2), [1, 1]),
+    (torch.zeros(1, 2), None), (torch.full((1, 1, 2), float('nan')), [1]),
+])
+def test_invalid_engine_outputs_are_rejected(logits, lengths):
+    engine = LocalEngine()
+    engine.infer = lambda *_: (logits, lengths)
+    with pytest.raises(ValueError, match='Emission'):
+        infer_emissions([torch.zeros(400)], engine, 'cpu')
 
 
 def test_torchaudio_cache_only_never_calls_downloader(tmp_path):
@@ -196,3 +231,31 @@ def test_real_onnx_bundle_roundtrip(tmp_path):
     quantized_model, _ = load_align_model('en', 'cpu', model_name=quantized, engine='onnx')
     actual, _ = quantized_model.infer(waveforms, lengths)
     torch.testing.assert_close(actual, expected, atol=.03, rtol=.03)
+
+
+def test_hf_onnx_export_preserves_variable_length_attention_masks(tmp_path):
+    pytest.importorskip('onnx')
+    pytest.importorskip('onnxscript')
+    pytest.importorskip('onnxruntime')
+    from transformers import Wav2Vec2Config, Wav2Vec2ForCTC
+    from whisperx.alignment_engine import export_onnx_alignment
+
+    config = Wav2Vec2Config(
+        hidden_size=8, num_hidden_layers=1, num_attention_heads=2, intermediate_size=16,
+        conv_dim=(4,) * 7, feat_extract_norm='layer', num_conv_pos_embeddings=4,
+        num_conv_pos_embedding_groups=2, vocab_size=4, mask_time_prob=0,
+    )
+    torch.manual_seed(23)
+    model = Wav2Vec2ForCTC(config).eval()
+    metadata = {'type': 'huggingface', 'language': 'en', 'dictionary': {'<pad>': 0, 'a': 1, 'b': 2, '|': 3}}
+    path = export_onnx_alignment(model, metadata, tmp_path/'hf-bundle')
+    engine, _ = load_align_model('en', 'cpu', model_name=path, engine='onnx', onnx_threads=1)
+    for count, samples in [(1, 400), (3, 16003)]:
+        waveform = torch.randn(count, samples)
+        lengths = torch.tensor([max(400, samples // (i + 1)) for i in range(count)])
+        with torch.inference_mode():
+            expected, expected_lengths = get_emission_engine(model, metadata).infer(waveform, lengths)
+        actual, actual_lengths = engine.infer(waveform, lengths)
+        torch.testing.assert_close(actual_lengths, expected_lengths)
+        for index, length in enumerate(expected_lengths):
+            torch.testing.assert_close(actual[index, :length], expected[index, :length], atol=1e-5, rtol=1e-4)

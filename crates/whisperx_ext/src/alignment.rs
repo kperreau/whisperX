@@ -2,6 +2,7 @@
 
 use ndarray::Array2;
 use numpy::PyReadonlyArray2;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
@@ -480,6 +481,42 @@ fn align_segment<'py>(
 
     let text_chars: Vec<char> = text.chars().collect();
     let text_clean_chars: Vec<char> = text_clean.chars().collect();
+    let num_classes = emission_owned.ncols();
+    if blank_id < 0 || blank_id as usize >= num_classes {
+        return Err(PyValueError::new_err(
+            "blank_id is outside the emission vocabulary",
+        ));
+    }
+    if dict_map
+        .values()
+        .any(|&id| id < 0 || id as usize >= num_classes)
+    {
+        return Err(PyValueError::new_err(
+            "Dictionary token is outside the emission vocabulary",
+        ));
+    }
+    if clean_cdx.len() != text_clean_chars.len() || clean_cdx.iter().any(|&i| i >= text_chars.len())
+    {
+        return Err(PyValueError::new_err(
+            "clean_cdx must map every cleaned character into the displayed text",
+        ));
+    }
+    if sentence_spans
+        .iter()
+        .any(|&(start, end)| start > end || end > text_chars.len())
+    {
+        return Err(PyValueError::new_err(
+            "Sentence span is outside the displayed text",
+        ));
+    }
+    if !t1.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        return Err(PyValueError::new_err(
+            "Alignment time and positive duration must be finite",
+        ));
+    }
+    if num_frames == 0 || text_clean_chars.is_empty() {
+        return Ok(None);
+    }
 
     let result = py.detach(move || {
         let has_wildcard = text_clean_chars.iter().any(|c| !dict_map.contains_key(c));

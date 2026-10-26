@@ -16,8 +16,9 @@ one receptive field; their timestamps still use the real audio duration.
 
 Length sorting and a 15-second padded-sample budget limit batch waste; a batch
 also respects `batch_size`. One individual window can exceed the batch budget.
-Set `chunk_seconds=None` to measure full context. For custom CTC geometry,
-metadata can specify `stride` and `receptive_field`; custom engines expose both.
+Set `chunk_seconds=None` to measure full context. Hugging Face convolution
+geometry and adapter downsampling are derived from the model config. For other
+custom CTC geometry, metadata can specify `stride` and `receptive_field`; custom engines expose both.
 The implementation targets the standard wav2vec2 CTC convolution stack.
 
 Chunking changes the transformer's context and can move word boundaries. It is a
@@ -54,6 +55,9 @@ activation products remain float. See the
 [ONNX Runtime quantization documentation](https://onnxruntime.ai/docs/how-to/quantization.html).
 Export itself does not fetch checkpoints. Loading a bundle is local and CPU only;
 its language must match the request. Quantization is selected at export time.
+The CLI's `--threads` limit is passed to ONNX as well as Torch. Invalid engine
+shapes, lengths and NaN probabilities raise before entering native alignment;
+the native entry point also validates token IDs, display indices and spans.
 
 `model_cache_only=True` now checks the Torchaudio checkpoint before calling its
 loader, as well as using `local_files_only` on the Hugging Face path. Missing
