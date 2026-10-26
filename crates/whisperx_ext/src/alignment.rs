@@ -243,24 +243,38 @@ fn build_subsegments(
 ) -> Vec<SubSegment> {
     let text_len = text_chars.len();
 
-    let mut cdx_to_seg: Vec<Option<usize>> = vec![None; text_len];
-    for (i, &cdx) in clean_cdx.iter().enumerate() {
-        cdx_to_seg[cdx] = Some(i);
-    }
-
     let mut char_starts: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_ends: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_scores: Vec<f64> = vec![f64::NAN; text_len];
     let mut char_word_idx: Vec<usize> = vec![0; text_len];
+    let mut char_counts = vec![0usize; text_len];
+
+    // Several spoken characters may belong to one displayed span (e.g. 43 ->
+    // forty three). Preserve the whole interval instead of overwriting it with
+    // the last phoneme. Unmapped display characters retain missing boundaries.
+    for (i, &cdx) in clean_cdx.iter().enumerate() {
+        let seg = &char_segments[i];
+        let start = round3(seg.start as f64 * ratio + t1);
+        let end = round3(seg.end as f64 * ratio + t1);
+        if char_counts[cdx] == 0 {
+            char_starts[cdx] = start;
+            char_ends[cdx] = end;
+            char_scores[cdx] = 0.0;
+        } else {
+            char_starts[cdx] = char_starts[cdx].min(start);
+            char_ends[cdx] = char_ends[cdx].max(end);
+        }
+        char_scores[cdx] += seg.score as f64;
+        char_counts[cdx] += 1;
+    }
+    for cdx in 0..text_len {
+        if char_counts[cdx] > 0 {
+            char_scores[cdx] = round3(char_scores[cdx] / char_counts[cdx] as f64);
+        }
+    }
 
     let mut word_idx = 0usize;
     for cdx in 0..text_len {
-        if let Some(seg_i) = cdx_to_seg[cdx] {
-            let seg = &char_segments[seg_i];
-            char_starts[cdx] = round3(seg.start as f64 * ratio + t1);
-            char_ends[cdx] = round3(seg.end as f64 * ratio + t1);
-            char_scores[cdx] = round3(seg.score as f64);
-        }
         char_word_idx[cdx] = word_idx;
         if no_spaces {
             word_idx += 1;

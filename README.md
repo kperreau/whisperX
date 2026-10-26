@@ -168,6 +168,28 @@ Torchaudio cannot load, their Hugging Face equivalents are selected instead.
 The `align-torch` extra declares the direct Torchaudio dependency; Pyannote may
 also install it transitively.
 
+CTC inference uses an explicit engine interface, with 10-second cores and one
+second of overlapping context by default. This bounds attention memory for long
+segments; batching also has a 15-second padded-sample budget. Set
+`chunk_seconds=None` in Python (or `--align_chunk_seconds 0`) to compare against
+full-context inference. Chunking changes model context: validate word boundaries
+on your recordings. See [benchmarks and reproduction instructions](docs/alignment-performance.md).
+
+An optional `align-onnx` extra provides local, offline ONNX bundles, opset 23
+export and constant-weight MatMul int8 quantization. Select a bundle with
+`load_align_model(..., engine="onnx", model_name="/path/to/bundle")` or
+`--align_engine onnx --align_model /path/to/bundle`. ONNX currently runs on CPU.
+CPU performance depends on architecture: CLI dynamic Torch int8 defaults to
+enabled on x86 and disabled on ARM; `--align_quantize` overrides that choice.
+
+Use `return_diagnostics=True` (CLI: `--align_diagnostics`) to inspect unsupported
+characters, wildcard/interpolated words, scores and alignment failures.
+`unsupported_policy="error"` (CLI: `--align_strict`) rejects unsupported text
+before model inference. For known pronunciation, pass explicit
+`spoken_replacements` on a segment; WhisperX preserves the displayed text and
+maps its timestamps to the spoken interval. Applications remain responsible for
+number pronunciation and sending the same spoken text to TTS.
+
 ### Speaker Diarization
 
 To **enable Speaker Diarization**, include your Hugging Face access token (read) that you can generate from [Here](https://huggingface.co/settings/tokens) after the `--hf_token` argument and accept the user agreement for the [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) model.
@@ -297,7 +319,10 @@ Transcription differences from openai's whisper:
 
 <h2 align="left" id="limitations">Limitations ⚠️</h2>
 
-- Transcript words which do not contain characters in the alignment models dictionary e.g. "2014." or "£13.60" cannot be aligned and therefore are not given a timing.
+- Characters absent from the alignment dictionary (e.g. digits/currency in
+  "2014." or "£13.60") use wildcard scores by default. These timestamps are
+  approximate and do not encode number pronunciation. Inspect diagnostics,
+  reject unsupported text, or supply explicit spoken replacements.
 - Overlapping speech is not handled particularly well by whisper nor whisperx
 - Diarization is far from perfect
 - Language specific wav2vec2 model is needed

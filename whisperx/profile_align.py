@@ -60,7 +60,8 @@ class Profile:
             b.add(time.perf_counter() - t0)
 
     def report(self) -> None:
-        total = sum(b.total for b in self.buckets.values()) or 1e-9
+        total = (self.buckets["total_align"].total + self.buckets.get("speaker.assign", _Bucket("speaker.assign")).total
+                 if "total_align" in self.buckets else sum(b.total for b in self.buckets.values())) or 1e-9
         width = max((len(b.name) for b in self.buckets.values()), default=8)
         print(f"\n{'stage':<{width}}  {'calls':>6}  {'total(s)':>10}  {'%':>6}")
         print("-" * (width + 30))
@@ -78,9 +79,10 @@ class ProfiledAlign:
     """
     Wraps `whisperx.alignment.align` with stage-level timers.
 
-    The wrapper monkey-patches the Rust entry point and the model forward call
-    with timing shims, so the timings stay accurate even though the heavy work
-    happens inside Rust / CUDA.
+    Uses an instance-local emission engine timer for Torch and ONNX. The Rust
+    entry point is temporarily patched, so use this profiler in an isolated
+    process, not concurrently with other alignment calls. total_align includes
+    model and Rust time; report percentages use that inclusive total once.
     """
 
     def __init__(self, audio, model, metadata, device: str = "cpu"):
@@ -95,20 +97,28 @@ class ProfiledAlign:
         transcript: Iterable[dict],
         return_char_alignments: bool = False,
         diarize_df=None,
+        **align_options,
     ):
         from whisperx import alignment as _alignment_module
 
         prof = self.profile
 
-        # Patch: model forward (covers "align_model forward")
-        orig_call = self.model.__class__.__call__
+        from whisperx.alignment_engine import get_emission_engine
+        backend = get_emission_engine(self.model, self.metadata)
+        device = self.device
 
-        def timed_call(self_, *a, **kw):
-            with prof.time("align_model.forward"):
-                out = orig_call(self_, *a, **kw)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                return out
+        class TimedEngine:
+            stride = backend.stride
+            receptive_field = backend.receptive_field
+
+            def infer(self, *args):
+                if str(device).startswith("cuda"):
+                    torch.cuda.synchronize(device)
+                with prof.time("align_model.forward"):
+                    out = backend.infer(*args)
+                    if str(device).startswith("cuda"):
+                        torch.cuda.synchronize(device)
+                    return out
 
         # Patch: Rust kernel (covers "dp + post-processing")
         orig_rust = _alignment_module._rust_align_segment
@@ -119,20 +129,19 @@ class ProfiledAlign:
             with prof.time("rust.dp+post"):
                 return orig_rust(*a, **kw)
 
-        self.model.__class__.__call__ = timed_call
         _alignment_module._rust_align_segment = timed_rust
         try:
             with prof.time("total_align"):
                 result = _align(
                     transcript=transcript,
-                    model=self.model,
-                    align_model_metadata=self.metadata,
+                    model=TimedEngine(),
+                    align_model_metadata={**self.metadata, "type": "custom"},
                     audio=self.audio,
                     device=self.device,
                     return_char_alignments=return_char_alignments,
+                    **align_options,
                 )
         finally:
-            self.model.__class__.__call__ = orig_call
             _alignment_module._rust_align_segment = orig_rust
 
         if diarize_df is not None:

@@ -1,6 +1,7 @@
 import argparse
 import gc
 import os
+import platform
 import warnings
 from typing import Optional
 
@@ -42,14 +43,19 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
     os.makedirs(output_dir, exist_ok=True)
 
     align_model: str = args.pop("align_model")
+    align_engine = args.pop("align_engine", "torch")
+    align_chunk_seconds = args.pop("align_chunk_seconds", 10.0)
+    align_diagnostics = args.pop("align_diagnostics", False)
+    align_strict = args.pop("align_strict", False)
+    align_bundle = align_model
     align_batch_size = args.pop("align_batch_size")
     if align_batch_size is None:
         align_batch_size = 16 if device == "cpu" else 8
     align_quantize = args.pop("align_quantize")
     if align_quantize is None:
-        align_quantize = (device == "cpu")
+        align_quantize = (device == "cpu" and platform.machine().lower() in {"x86_64", "amd64"})
         if align_quantize:
-            logger.info("align_quantize not specified, enabling dynamic int8 quantization on CPU (2-3x faster align)")
+            logger.info("align_quantize not specified, enabling CPU dynamic int8 quantization; benchmark on your target CPU")
     align_only: bool = args.pop("align_only")
     transcript_text: Optional[str] = args.pop("transcript_text")
     transcript_file: Optional[str] = args.pop("transcript_file")
@@ -261,7 +267,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         results = []
         align_model, align_metadata = load_align_model(
             align_language, device, model_name=align_model, model_dir=model_dir, model_cache_only=model_cache_only,
-            quantize=align_quantize,
+            quantize=align_quantize, engine=align_engine,
         )
         for result, audio_path in tmp_results:
             # >> Align
@@ -279,7 +285,8 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                     )
                     align_model, align_metadata = load_align_model(
                         result["language"], device, model_dir=model_dir, model_cache_only=model_cache_only,
-                        quantize=align_quantize,
+                        quantize=align_quantize, engine=align_engine,
+                        model_name=align_bundle if align_engine == "onnx" else None,
                     )
                 logger.info("Performing alignment...")
                 result: AlignedTranscriptionResult = align(
@@ -292,6 +299,9 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
                     return_char_alignments=return_char_alignments,
                     print_progress=print_progress,
                     batch_size=align_batch_size,
+                    chunk_seconds=align_chunk_seconds or None,
+                    return_diagnostics=align_diagnostics,
+                    unsupported_policy="error" if align_strict else "wildcard",
                 )
 
             results.append((result, audio_path))

@@ -31,8 +31,12 @@ def cli():
 
     # alignment params
     parser.add_argument("--align_model", default=None, help="Name of phoneme-level ASR model to do alignment")
+    parser.add_argument("--align_engine", choices=["torch", "onnx"], default="torch", help="CTC inference engine; ONNX requires --align_model pointing to a local exported bundle.")
+    parser.add_argument("--align_chunk_seconds", type=float, default=10.0, help="Maximum core duration per CTC forward; 0 disables chunking. Adds one second of context on each side.")
+    parser.add_argument("--align_diagnostics", action="store_true", help="Include unsupported characters and approximate alignment diagnostics in JSON output.")
+    parser.add_argument("--align_strict", action="store_true", help="Reject unsupported characters instead of using wildcard scores.")
     parser.add_argument("--align_batch_size", type=int, default=None, help="Batch size for the wav2vec2 alignment forward pass. Higher = faster on GPU, more VRAM. Set to 1 to disable batching. Default: 16 on CPU, 8 on GPU.")
-    parser.add_argument("--align_quantize", type=str2bool, default=None, help="Apply dynamic int8 quantization to the wav2vec2 alignment model (CPU only). Typically 2-3x faster on CPU at a tiny accuracy cost. Default: True on CPU, False (ignored) on CUDA.")
+    parser.add_argument("--align_quantize", type=str2bool, default=None, help="Apply dynamic int8 quantization to the wav2vec2 alignment model (CPU only). Performance and timestamp drift depend on the model and CPU; benchmark before enabling. Default: True on x86 CPU, False on ARM and CUDA.")
     parser.add_argument("--align_only", action="store_true", help="Skip Whisper ASR entirely and align audio against a known text. Requires --transcript_text or --transcript_file plus --language. No hallucinations possible since Whisper is never invoked. Use this when you already have the exact transcript and only need word-level timestamps.")
     parser.add_argument("--transcript_text", type=str, default=None, help="Text to align (used with --align_only). Mutually exclusive with --transcript_file.")
     parser.add_argument("--transcript_file", type=str, default=None, help="Path to a UTF-8 text file containing the text to align (used with --align_only). Mutually exclusive with --transcript_text.")

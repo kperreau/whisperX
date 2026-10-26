@@ -36,6 +36,13 @@ class SingleSegment(TypedDict):
     end: float
     text: str
     avg_logprob: NotRequired[float]
+    spoken_replacements: NotRequired[List["SpokenReplacement"]]
+
+
+class SpokenReplacement(TypedDict):
+    start: int
+    end: int
+    text: str
 
 
 class SegmentData(TypedDict):
@@ -76,3 +83,4 @@ class AlignedTranscriptionResult(TypedDict):
     """
     segments: List[SingleAlignedSegment]
     word_segments: List[SingleWordSegment]
+    diagnostics: NotRequired[List[dict]]

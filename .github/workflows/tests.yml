@@ -40,10 +40,10 @@ jobs:
           version: "0.13.5"
 
       - name: Install the project
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --extra align-onnx
 
       - name: Run tests
-        run: uv run --locked --extra dev pytest tests/ -v
+        run: uv run --locked --extra dev --extra align-onnx pytest tests/ -v
 
       - name: Install FFmpeg for speech validation
         if: matrix.python-version == '3.15' && runner.os == 'Linux'
