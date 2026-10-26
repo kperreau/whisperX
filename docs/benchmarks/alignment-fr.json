@@ -217,17 +217,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": null,
       "audio_seconds": 23.8803125,
-      "load_ms": 112.75762505829334,
+      "load_ms": 115.59774982742965,
       "align_ms": [
-        789.8259591311216,
-        777.1443750243634,
-        763.6262499727309
+        777.66799996607,
+        756.5941670909524,
+        759.8399170674384
       ],
-      "align_median_ms": 777.1443750243634,
-      "forward_median_ms": 775.4881249275059,
-      "rust_median_ms": 0.5935421213507652,
-      "overhead_median_ms": 1.064749900251627,
-      "peak_rss_bytes": 1229946880,
+      "align_median_ms": 759.8399170674384,
+      "forward_median_ms": 758.0838750582188,
+      "rust_median_ms": 0.5873749032616615,
+      "overhead_median_ms": 1.0835840366780758,
+      "peak_rss_bytes": 1231388672,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -242,14 +242,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 0.882352941176455,
-        "boundary_p95_ms": 0.0,
-        "boundary_max_ms": 20.000000000000018,
-        "within_budget": true
+        "boundary_mean_ms": 4.705882352941158,
+        "boundary_p95_ms": 19.999999999999574,
+        "boundary_max_ms": 239.99999999999977,
+        "within_budget": false
       },
-      "speedup": 0.4706629757132572,
+      "speedup": 0.4813817698857782,
       "word_count": 68,
-      "word_timestamps_sha256": "5a0f943f580947fd76fab10335c98546861b2828de3826f347a6733eb623024f",
+      "word_timestamps_sha256": "23df48979f2b77b3393552b92646b0e6da5d893d658c3ff471a3dbf7db0f3646",
       "bundle": {
         "language": "fr",
         "type": "onnx",
@@ -258,24 +258,25 @@
         "stride": 320,
         "receptive_field": 400,
         "opset": 23,
-        "quantized": true
+        "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range"
       }
     },
     {
       "variant": "onnx-int8",
       "chunk_seconds": 10.0,
       "audio_seconds": 23.8803125,
-      "load_ms": 114.29720791056752,
+      "load_ms": 115.47554098069668,
       "align_ms": [
-        799.8647920321673,
-        792.684999993071,
-        790.8592917956412
+        794.1415419336408,
+        780.6475409306586,
+        781.835834030062
       ],
-      "align_median_ms": 792.684999993071,
-      "forward_median_ms": 790.5268759932369,
-      "rust_median_ms": 0.6109580863267183,
-      "overhead_median_ms": 1.5471659135073423,
-      "peak_rss_bytes": 885456896,
+      "align_median_ms": 781.835834030062,
+      "forward_median_ms": 779.8384169582278,
+      "rust_median_ms": 0.605457928031683,
+      "overhead_median_ms": 1.4598751440644264,
+      "peak_rss_bytes": 882655232,
       "forward_calls": 3,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -290,14 +291,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 3.0882352941176627,
-        "boundary_p95_ms": 20.000000000000018,
-        "boundary_max_ms": 20.000000000003126,
+        "boundary_mean_ms": 3.69117647058826,
+        "boundary_p95_ms": 20.000000000000462,
+        "boundary_max_ms": 40.0000000000027,
         "within_budget": true
       },
-      "speedup": 0.4614356069699612,
+      "speedup": 0.46783873057131103,
       "word_count": 68,
-      "word_timestamps_sha256": "5f81e2f00f551c023ae55f2c4639f356bcf852794bc5947f7c7939151b66a272",
+      "word_timestamps_sha256": "ad5eabdfb8f06c2d23a134b5a3737e29c7d9eb00e2a20c41b290204ea17223a0",
       "bundle": {
         "language": "fr",
         "type": "onnx",
@@ -306,7 +307,8 @@
         "stride": 320,
         "receptive_field": 400,
         "opset": 23,
-        "quantized": true
+        "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range"
       }
     },
     {
@@ -520,17 +522,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": null,
       "audio_seconds": 90.0,
-      "load_ms": 123.9765000063926,
+      "load_ms": 115.31345802359283,
       "align_ms": [
-        4884.184041060507,
-        4803.4506670665,
-        4809.954999946058
+        4843.0896669160575,
+        4693.935916991904,
+        4769.946999847889
       ],
-      "align_median_ms": 4809.954999946058,
-      "forward_median_ms": 4803.271000040695,
-      "rust_median_ms": 4.812834085896611,
-      "overhead_median_ms": 1.871165819466114,
-      "peak_rss_bytes": 4959600640,
+      "align_median_ms": 4769.946999847889,
+      "forward_median_ms": 4763.300999999046,
+      "rust_median_ms": 4.841082962229848,
+      "overhead_median_ms": 1.804916886612773,
+      "peak_rss_bytes": 4954439680,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -545,14 +547,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 4.460784313725488,
+        "boundary_mean_ms": 1.3725490196078303,
         "boundary_p95_ms": 19.999999999999574,
-        "boundary_max_ms": 240.000000000002,
-        "within_budget": false
+        "boundary_max_ms": 39.99999999999204,
+        "within_budget": true
       },
-      "speedup": 0.48745019443336496,
+      "speedup": 0.4915386900555101,
       "word_count": 204,
-      "word_timestamps_sha256": "5f1ae09ad8cac3f06053b2d25be954679709b2b5499ae4ebd2729f4ffcdedb9b",
+      "word_timestamps_sha256": "2e389570f84973d1ccb8b23eb19ca3f373cc0c419dcfaf2c28de09ffe875cc60",
       "bundle": {
         "language": "fr",
         "type": "onnx",
@@ -561,24 +563,25 @@
         "stride": 320,
         "receptive_field": 400,
         "opset": 23,
-        "quantized": true
+        "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range"
       }
     },
     {
       "variant": "onnx-int8",
       "chunk_seconds": 10.0,
       "audio_seconds": 90.0,
-      "load_ms": 116.39274982735515,
+      "load_ms": 117.54833301529288,
       "align_ms": [
-        3048.329208046198,
-        3041.1293329671025,
-        3145.736916922033
+        3003.169208066538,
+        2995.4152079299092,
+        2995.841084048152
       ],
-      "align_median_ms": 3048.329208046198,
-      "forward_median_ms": 3040.1438761036843,
-      "rust_median_ms": 4.841709043830633,
-      "overhead_median_ms": 3.4125836100429296,
-      "peak_rss_bytes": 878952448,
+      "align_median_ms": 2995.841084048152,
+      "forward_median_ms": 2987.8930817358196,
+      "rust_median_ms": 4.777624970301986,
+      "overhead_median_ms": 3.28916497528553,
+      "peak_rss_bytes": 880246784,
       "forward_calls": 9,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -593,14 +596,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 5.686274509804,
+        "boundary_mean_ms": 4.901960784313756,
         "boundary_p95_ms": 20.000000000003126,
-        "boundary_max_ms": 240.000000000002,
-        "within_budget": false
+        "boundary_max_ms": 79.9999999999983,
+        "within_budget": true
       },
-      "speedup": 0.7691470769465227,
+      "speedup": 0.7826227874448085,
       "word_count": 204,
-      "word_timestamps_sha256": "f9bf791e98fe30b47c2b7dce17583c0ceda05338c7ebe04e8a4d5a60230ec83e",
+      "word_timestamps_sha256": "dd616b835d5500986e7d20bbabfdb2c9a22cb880295783d3e4090ab697da9504",
       "bundle": {
         "language": "fr",
         "type": "onnx",
@@ -609,7 +612,8 @@
         "stride": 320,
         "receptive_field": 400,
         "opset": 23,
-        "quantized": true
+        "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range"
       }
     }
   ]

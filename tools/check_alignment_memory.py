@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--cpus', type=int, default=4)
     parser.add_argument('--duration', type=float, default=90)
     parser.add_argument('--timeout', type=float, default=300)
+    parser.add_argument('--reference-json', type=Path, help='Full native benchmark output to gate final word boundaries')
+    parser.add_argument('--max-boundary-ms', type=float, default=100)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -67,11 +69,26 @@ def main():
                       'exit_code': info['State']['ExitCode'], 'oom_killed': info['State']['OOMKilled'],
                       'timed_out': timed_out, 'stderr': stderr}
             records.append(record)
+            if label == 'chunked' and record['exit_code'] == 0 and args.reference_json:
+                from benchmark_alignment import compare_words
+
+                worker = json.loads((args.output_dir/'chunked.json').read_text())
+                references = json.loads(args.reference_json.read_text())['records']
+                reference = next(r for r in references if r.get('audio_seconds') == args.duration
+                                 and r['variant'] == 'torch-fp32' and r['chunk_seconds'] is None)
+                if (reference['audio_sha256'] != worker['audio_sha256'] or
+                        reference['text_sha256'] != worker['text_sha256']):
+                    raise ValueError('Reference audio/transcript hashes do not match the worker')
+                record['fidelity'] = compare_words(reference['words'], worker['words'])
+                record['fidelity']['within_budget'] = (
+                    record['fidelity']['comparable'] and
+                    record['fidelity']['boundary_max_ms'] <= args.max_boundary_ms)
             (args.output_dir/'container-states.json').write_text(json.dumps(records, indent=2)+'\n')
             print(json.dumps(record), flush=True)
         finally:
             subprocess.run(['docker', 'rm', '-f', container], capture_output=True, check=True)
-    if records[0]['exit_code'] or records[0]['oom_killed'] or records[0]['timed_out']:
+    if (records[0]['exit_code'] or records[0]['oom_killed'] or records[0]['timed_out'] or
+            not records[0].get('fidelity', {}).get('within_budget', True)):
         raise SystemExit(1)
 
 

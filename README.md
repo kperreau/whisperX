@@ -179,8 +179,9 @@ An optional `align-onnx` extra provides local, offline ONNX bundles, opset 23
 export and constant-weight MatMul int8 quantization. Select a bundle with
 `load_align_model(..., engine="onnx", model_name="/path/to/bundle")` or
 `--align_engine onnx --align_model /path/to/bundle`. ONNX currently runs on CPU.
-CPU performance depends on architecture: CLI dynamic Torch int8 defaults to
-enabled on x86 and disabled on ARM; `--align_quantize` overrides that choice.
+CPU performance and timestamp drift depend on architecture. CLI dynamic Torch
+int8 is opt-in with `--align_quantize True`; benchmark its final word boundaries
+on the target CPU first.
 
 Use `return_diagnostics=True` (CLI: `--align_diagnostics`) to inspect unsupported
 characters, wildcard/interpolated words, scores and alignment failures.

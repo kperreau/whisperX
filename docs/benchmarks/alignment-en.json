@@ -217,17 +217,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": null,
       "audio_seconds": 11.0,
-      "load_ms": 116.50049989111722,
+      "load_ms": 113.59691596589983,
       "align_ms": [
-        321.3648749515414,
-        315.7989999745041,
-        316.1072500515729
+        319.6167091373354,
+        308.45929216593504,
+        307.62370815500617
       ],
-      "align_median_ms": 316.1072500515729,
-      "forward_median_ms": 315.22454088553786,
-      "rust_median_ms": 0.12312503531575203,
-      "overhead_median_ms": 0.764000229537487,
-      "peak_rss_bytes": 802242560,
+      "align_median_ms": 308.45929216593504,
+      "forward_median_ms": 307.5687501113862,
+      "rust_median_ms": 0.11462508700788021,
+      "overhead_median_ms": 0.7952500600367785,
+      "peak_rss_bytes": 803110912,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -242,14 +242,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 0.454545454545455,
+        "boundary_mean_ms": 0.0,
         "boundary_p95_ms": 0.0,
-        "boundary_max_ms": 20.000000000000018,
+        "boundary_max_ms": 0.0,
         "within_budget": true
       },
-      "speedup": 0.5226899509235122,
+      "speedup": 0.5356495563996173,
       "word_count": 22,
-      "word_timestamps_sha256": "ee5c4fb0b5ecf215723acada7634ac2efb6b19fb650f1cf7beafe60491c8a310",
+      "word_timestamps_sha256": "7731bd8425e83b4c877dfb7d09f1b400c0614c4cdc20e1e3febf89fc81eee0d2",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -258,6 +258,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     },
@@ -265,17 +266,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": 10.0,
       "audio_seconds": 11.0,
-      "load_ms": 116.43520789220929,
+      "load_ms": 109.84762501902878,
       "align_ms": [
-        323.2604172080755,
-        314.9674169253558,
-        313.2539589423686
+        321.7362919822335,
+        316.3254589308053,
+        308.6434998549521
       ],
-      "align_median_ms": 314.9674169253558,
-      "forward_median_ms": 314.0302081592381,
-      "rust_median_ms": 0.11895899660885334,
-      "overhead_median_ms": 0.8182497695088387,
-      "peak_rss_bytes": 801718272,
+      "align_median_ms": 316.3254589308053,
+      "forward_median_ms": 315.4161248821765,
+      "rust_median_ms": 0.11224998161196709,
+      "overhead_median_ms": 0.7966251578181982,
+      "peak_rss_bytes": 802291712,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -290,14 +291,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 0.454545454545455,
+        "boundary_mean_ms": 0.0,
         "boundary_p95_ms": 0.0,
-        "boundary_max_ms": 20.000000000000018,
+        "boundary_max_ms": 0.0,
         "within_budget": true
       },
-      "speedup": 0.5245815095063627,
+      "speedup": 0.522329386874186,
       "word_count": 22,
-      "word_timestamps_sha256": "ee5c4fb0b5ecf215723acada7634ac2efb6b19fb650f1cf7beafe60491c8a310",
+      "word_timestamps_sha256": "7731bd8425e83b4c877dfb7d09f1b400c0614c4cdc20e1e3febf89fc81eee0d2",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -306,6 +307,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     },
@@ -520,17 +522,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": null,
       "audio_seconds": 30.0,
-      "load_ms": 116.34158296510577,
+      "load_ms": 110.95712496899068,
       "align_ms": [
-        1058.6411671247333,
-        1037.1051249094307,
-        1023.0840421281755
+        1046.795749804005,
+        1013.1502919830382,
+        1011.998041998595
       ],
-      "align_median_ms": 1037.1051249094307,
-      "forward_median_ms": 1035.8580411411822,
-      "rust_median_ms": 0.3220830112695694,
-      "overhead_median_ms": 0.9583341889083385,
-      "peak_rss_bytes": 1659699200,
+      "align_median_ms": 1013.1502919830382,
+      "forward_median_ms": 1011.7357918061316,
+      "rust_median_ms": 0.41154096834361553,
+      "overhead_median_ms": 1.0003750212490559,
+      "peak_rss_bytes": 1661976576,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -545,14 +547,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 1.3636363636363598,
-        "boundary_p95_ms": 19.999999999999574,
+        "boundary_mean_ms": 0.90909090909091,
+        "boundary_p95_ms": 0.0,
         "boundary_max_ms": 20.00000000000135,
         "within_budget": true
       },
-      "speedup": 0.46629819713009063,
+      "speedup": 0.4773233090947392,
       "word_count": 44,
-      "word_timestamps_sha256": "edf315e11a28447986e320863c7dd0a1361fa6e0eefcb4dd7f1921f48a2aac38",
+      "word_timestamps_sha256": "be1b81adc278da9eb720c2163722d29848a7a454c7ad515d3940787f6c605995",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -561,6 +563,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     },
@@ -568,17 +571,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": 10.0,
       "audio_seconds": 30.0,
-      "load_ms": 114.92283386178315,
+      "load_ms": 111.07112490572035,
       "align_ms": [
-        982.2512920945883,
-        975.2696671057492,
-        967.3119171056896
+        971.9450001139194,
+        971.8103748746216,
+        979.3192078359425
       ],
-      "align_median_ms": 975.2696671057492,
-      "forward_median_ms": 973.6358332447708,
-      "rust_median_ms": 0.3209169954061508,
-      "overhead_median_ms": 1.303583849221468,
-      "peak_rss_bytes": 847970304,
+      "align_median_ms": 971.9450001139194,
+      "forward_median_ms": 970.2837511431426,
+      "rust_median_ms": 0.32716686837375164,
+      "overhead_median_ms": 1.3852494303137064,
+      "peak_rss_bytes": 840531968,
       "forward_calls": 3,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -593,14 +596,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 2.045454545454547,
+        "boundary_mean_ms": 2.0454545454545676,
         "boundary_p95_ms": 19.999999999999574,
         "boundary_max_ms": 20.00000000000135,
         "within_budget": true
       },
-      "speedup": 0.4958631097538358,
+      "speedup": 0.4975592753941461,
       "word_count": 44,
-      "word_timestamps_sha256": "9e254f5e73ea83ed1adb57f8cdc255df8b3fec4e2abc8e6b3599db4d36d45b40",
+      "word_timestamps_sha256": "9de673ee8bfc4a73fd3ab5be8f90836a22770d3f6b2683dea2e373bc77ae391d",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -609,6 +612,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     },
@@ -823,17 +827,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": null,
       "audio_seconds": 90.0,
-      "load_ms": 122.40933300927281,
+      "load_ms": 113.10016713105142,
       "align_ms": [
-        4991.36104201898,
-        4993.659249972552,
-        4859.942957991734
+        4977.786417119205,
+        4693.195249885321,
+        4699.772292049602
       ],
-      "align_median_ms": 4991.36104201898,
-      "forward_median_ms": 4986.372541869059,
-      "rust_median_ms": 3.1002918258309364,
-      "overhead_median_ms": 1.7090830951929092,
-      "peak_rss_bytes": 4933369856,
+      "align_median_ms": 4699.772292049602,
+      "forward_median_ms": 4695.2048339881,
+      "rust_median_ms": 2.9854171443730593,
+      "overhead_median_ms": 1.6830009408295155,
+      "peak_rss_bytes": 4932059136,
       "forward_calls": 1,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -853,9 +857,9 @@
         "boundary_max_ms": 0.0,
         "within_budget": true
       },
-      "speedup": 0.4732266035290836,
+      "speedup": 0.5025870799948747,
       "word_count": 176,
-      "word_timestamps_sha256": "018c6cc031d2799aba594365061070b47c57d175e15efd1c01eae2b99d749be1",
+      "word_timestamps_sha256": "e9357d4ed923c6c5ede29aed9173b4e2a67e6d65fa2f4ec2db877b4a3619a315",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -864,6 +868,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     },
@@ -871,17 +876,17 @@
       "variant": "onnx-int8",
       "chunk_seconds": 10.0,
       "audio_seconds": 90.0,
-      "load_ms": 117.87908407859504,
+      "load_ms": 117.24854190833867,
       "align_ms": [
-        2991.2480839993805,
-        2992.1191670000553,
-        2992.079583927989
+        2994.9939160142094,
+        2997.811625013128,
+        2996.094583068043
       ],
-      "align_median_ms": 2992.079583927989,
-      "forward_median_ms": 2986.1595407128334,
-      "rust_median_ms": 2.9536669608205557,
-      "overhead_median_ms": 2.966376254335046,
-      "peak_rss_bytes": 854278144,
+      "align_median_ms": 2996.094583068043,
+      "forward_median_ms": 2990.0029578711838,
+      "rust_median_ms": 2.9692500829696655,
+      "overhead_median_ms": 3.1702923588454723,
+      "peak_rss_bytes": 855425024,
       "forward_calls": 9,
       "torch": "2.14.1",
       "python": "3.15.1",
@@ -896,14 +901,14 @@
       "onnxruntime": "1.31.0",
       "fidelity": {
         "comparable": true,
-        "boundary_mean_ms": 0.9659090909090312,
-        "boundary_p95_ms": 0.0,
-        "boundary_max_ms": 20.000000000003126,
+        "boundary_mean_ms": 1.0795454545454328,
+        "boundary_p95_ms": 19.99999999999602,
+        "boundary_max_ms": 20.000000000010232,
         "within_budget": true
       },
-      "speedup": 0.7894324888916047,
+      "speedup": 0.7883745881224024,
       "word_count": 176,
-      "word_timestamps_sha256": "3cde83535cd5a3478e0985b61bf54c3c81bc7bc403f86cbbcc9f136479c7b53e",
+      "word_timestamps_sha256": "3a5f23392dfdb75d0a6277f1b91a4539700bae57cd512c956c06bb0081cdaab5",
       "bundle": {
         "language": "en",
         "type": "onnx",
@@ -912,6 +917,7 @@
         "receptive_field": 400,
         "opset": 23,
         "quantized": true,
+        "quantization": "qint8-per-channel-reduced-range",
         "model_name": "WAV2VEC2_ASR_BASE_960H"
       }
     }

@@ -49,7 +49,7 @@ Export creates a new directory with `model.onnx` and `metadata.json`. It uses th
 [Dynamo ONNX exporter](https://docs.pytorch.org/docs/stable/onnx) with opset 23,
 dynamic batch/sample dimensions and runtime graph optimizations. The measured
 base models contain 12 ONNX `Attention` operators. Targeted int8 quantization is
-per-channel QInt8 for constant-weight MatMul nodes; convolution and attention
+per-channel QInt8 with reduced range for constant-weight MatMul nodes; convolution and attention
 activation products remain float. See the
 [ONNX Runtime quantization documentation](https://onnxruntime.ai/docs/how-to/quantization.html).
 Export itself does not fetch checkpoints. Loading a bundle is local and CPU only;
@@ -59,7 +59,9 @@ its language must match the request. Quantization is selected at export time.
 loader, as well as using `local_files_only` on the Hugging Face path. Missing
 local files raise instead of triggering a download. Torch models are set to eval
 mode. Torch int8 engine selection favors x86/fbgemm on x86 and qnnpack on ARM.
-The CLI defaults to float on ARM because its measured dynamic int8 path is slower.
+The CLI defaults to float: measured dynamic int8 is slower on this ARM CPU and
+exceeds the French timestamp drift budget. Explicit `--align_quantize True`
+remains available after validation on the target CPU.
 
 ## Spoken text, displayed text and diagnostics
 
@@ -145,24 +147,23 @@ opset 23 and int8 do not automatically outperform native Torch on this CPU.
 | en | torch-fp32 | 10 s cores | 1533 | 1527 | 1506 | 20 | pass |
 | en | onnx-fp32 | full | 6119 | 6114 | 4995 | 0 | pass |
 | en | onnx-fp32 | 10 s cores | 4798 | 4790 | 1065 | 20 | pass |
-| en | onnx-int8 | full | 4991 | 4986 | 4705 | 0 | pass |
-| en | onnx-int8 | 10 s cores | 2992 | 2986 | 815 | 20 | pass |
+| en | onnx-int8 | full | 4700 | 4695 | 4704 | 0 | pass |
+| en | onnx-int8 | 10 s cores | 2996 | 2990 | 816 | 20 | pass |
 | fr | torch-fp32 | full | 2345 | 2338 | 3979 | 0 | pass |
 | fr | torch-int8 | full | 4025 | 4018 | 4164 | 240 | FAIL |
 | fr | torch-fp32 | 10 s cores | 1552 | 1543 | 1509 | 80 | pass |
 | fr | onnx-fp32 | full | 6288 | 6280 | 5020 | 0 | pass |
 | fr | onnx-fp32 | 10 s cores | 4745 | 4736 | 1089 | 80 | pass |
-| fr | onnx-int8 | full | 4810 | 4803 | 4730 | 240 | FAIL |
-| fr | onnx-int8 | 10 s cores | 3048 | 3040 | 838 | 240 | FAIL |
+| fr | onnx-int8 | full | 4770 | 4763 | 4725 | 40 | pass |
+| fr | onnx-int8 | 10 s cores | 2996 | 2988 | 839 | 80 | pass |
 
 For en, Torch fp32 chunking is **1.54× faster** and reduces peak RSS by **62%**, with maximum relative boundary drift of **20 ms**.
 
 For fr, Torch fp32 chunking is **1.51× faster** and reduces peak RSS by **62%**, with maximum relative boundary drift of **80 ms**.
 
-On shorter clips, savings can be smaller or latency can increase: the French 23.88-second probe is slower with chunking. Both Torch and ONNX int8 reach **240 ms** maximum drift on the 90-second French probe, exceeding the 100 ms budget, including the chunked ONNX int8 variant. They are experimental options requiring corpus validation.
+On shorter clips, savings can be smaller or latency can increase: the French 23.88-second probe is slower with chunking. Torch int8 reaches **240 ms** maximum drift on the 90-second French probe. Reduced-range ONNX int8 reaches **240 ms** maximum drift across the French cases. Quantized variants require corpus validation; inspect each row against the 100 ms budget.
 
 Evidence: [English](benchmarks/alignment-en.json), [French](benchmarks/alignment-fr.json), [2 GiB container check](benchmarks/alignment-2g.json). The benchmark reports model forward separately from Rust/overhead and model loading. Process peak RSS includes loading; it is not just incremental tensor memory.
-
 
 ## Enforced 2 GiB memory check
 
@@ -174,7 +175,7 @@ read-only mounts; its existing native extension handled the unchanged CTC path
 is built and covered separately by the local tests.
 
 The chunked run exits 0, records a cgroup limit of 2,147,483,648 bytes and no OOM
-kills. Full-context inference with the identical bundle exits 137 and Docker
+kills, and its final word boundaries are checked against the native fp32 reference. Full-context inference with the identical bundle exits 137 and Docker
 reports `OOMKilled=true`. See `benchmarks/alignment-2g.json` for the exact image ID,
 limits, container states and successful worker metrics. Emulated timings are not
 used in the performance tables. A native Scaleway amd64 benchmark and downstream
@@ -183,7 +184,8 @@ release or deployment.
 
 To repeat using an image with Python, Torch, ONNX Runtime, FFmpeg and the native
 extension, use the committed helper. It mounts this checkout read-only, starts
-both containers sequentially, saves their worker outputs and inspected resource
+both containers sequentially, compares final word boundaries with the native
+benchmark reference, saves worker outputs and inspected resource
 limits/OOM state, then removes the containers:
 
 ```sh
@@ -191,10 +193,19 @@ python tools/check_alignment_memory.py \
   --image homiclip-transcribe-onnx:local \
   --audio /tmp/jfk.flac --bundle /tmp/en-int8 \
   --text 'and so my fellow americans ask not what your country can do for you ask what you can do for your country' \
-  --output-dir /tmp/alignment-memory
+  --reference-json /tmp/alignment.json --output-dir /tmp/alignment-memory
 ```
 
 The image tag is local; the evidence pins its image ID. Override `--image`,
 `--python` or `--platform` for another compatible runtime. The helper returns
-nonzero if chunked inference fails; full-context success or OOM is preserved as
+nonzero if chunked inference fails or exceeds the timestamp budget;
+full-context success or OOM is preserved as
 observed evidence, since a different model/runtime can fit the memory limit.
+
+The cross-platform check caught a full-range QInt8 regression: memory stayed below
+2 GiB but final timestamps were unusable on this x86 runtime. See the retained
+[failed fidelity evidence](benchmarks/alignment-2g-full-range-regression.json).
+Reduced-range quantization corrects this case. This is consistent with the
+[documented U8S8 saturation risk on AVX2/AVX512](https://onnxruntime.ai/docs/how-to/quantization.html#data-type-selection)
+and is why export now uses reduced range by default. Native ARM timings alone
+would not have detected this target-runtime failure.

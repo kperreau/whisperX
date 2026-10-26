@@ -193,11 +193,12 @@ def export_onnx_alignment(model, metadata, output_dir, *, opset=23, quantize=Fal
         float_path = output_dir / "float.onnx"
         path.rename(float_path)
         quantize_dynamic(str(float_path), str(path), weight_type=QuantType.QInt8,
-                         per_channel=True, op_types_to_quantize=["MatMul"],
+                         per_channel=True, reduce_range=True, op_types_to_quantize=["MatMul"],
                          extra_options={"MatMulConstBOnly": True})
         float_path.unlink()
     bundle_metadata = {**metadata, "type": "onnx", "format_version": 1,
                        "stride": engine.stride, "receptive_field": engine.receptive_field,
-                       "opset": opset, "quantized": quantize}
+                       "opset": opset, "quantized": quantize,
+                       "quantization": "qint8-per-channel-reduced-range" if quantize else "fp32"}
     (output_dir / "metadata.json").write_text(json.dumps(bundle_metadata, indent=2) + "\n")
     return output_dir

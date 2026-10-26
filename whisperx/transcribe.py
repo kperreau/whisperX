@@ -1,7 +1,6 @@
 import argparse
 import gc
 import os
-import platform
 import warnings
 from typing import Optional
 
@@ -53,9 +52,7 @@ def transcribe_task(args: dict, parser: argparse.ArgumentParser):
         align_batch_size = 16 if device == "cpu" else 8
     align_quantize = args.pop("align_quantize")
     if align_quantize is None:
-        align_quantize = (device == "cpu" and platform.machine().lower() in {"x86_64", "amd64"})
-        if align_quantize:
-            logger.info("align_quantize not specified, enabling CPU dynamic int8 quantization; benchmark on your target CPU")
+        align_quantize = False
     align_only: bool = args.pop("align_only")
     transcript_text: Optional[str] = args.pop("transcript_text")
     transcript_file: Optional[str] = args.pop("transcript_file")

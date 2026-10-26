@@ -15,7 +15,14 @@
       "exit_code": 0,
       "oom_killed": false,
       "timed_out": false,
-      "stderr": ""
+      "stderr": "",
+      "fidelity": {
+        "comparable": true,
+        "boundary_mean_ms": 1.0227272727271917,
+        "boundary_p95_ms": 19.99999999999602,
+        "boundary_max_ms": 20.000000000010232,
+        "within_budget": true
+      }
     },
     {
       "label": "full",
@@ -36,15 +43,15 @@
     "variant": "onnx-int8",
     "chunk_seconds": 10.0,
     "audio_seconds": 90.0,
-    "load_ms": 535.9756669786293,
+    "load_ms": 548.5201250121463,
     "align_ms": [
-      25333.69492800557
+      24659.01597001357
     ],
-    "align_median_ms": 25333.69492800557,
-    "forward_median_ms": 25274.318345967913,
-    "rust_median_ms": 13.252333999844268,
-    "overhead_median_ms": 46.12424803781323,
-    "peak_rss_bytes": 999702528,
+    "align_median_ms": 24659.01597001357,
+    "forward_median_ms": 24599.260341987247,
+    "rust_median_ms": 12.565415992867202,
+    "overhead_median_ms": 47.19021203345619,
+    "peak_rss_bytes": 999817216,
     "forward_calls": 9,
     "torch": "2.14.1+cpu",
     "python": "3.15.1",
@@ -56,19 +63,19 @@
     "text_sha256": "880038ec1c8c450de59e56c613f14ac01b455a934e4752321e07f1a7cbcec0ee",
     "cgroup": {
       "memory.max": "2147483648",
-      "memory.peak": "1017192448",
+      "memory.peak": "1017401344",
       "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
       "cpu.max": "400000 100000"
     },
     "model_name": "WAV2VEC2_ASR_BASE_960H",
     "onnxruntime": "1.31.0",
     "word_count": 176,
-    "word_timestamps_sha256": "71b1826d63dedacb4692cd9be66668a381b9e0e3c47bd577172b7fdabd7c1758",
+    "word_timestamps_sha256": "1465d714fb3f824542120ee48ee955db35f8f94d7d30987953d6b1c52cc78681",
     "fidelity": {
       "comparable": true,
-      "boundary_mean_ms": 32144.678977272728,
-      "boundary_p95_ms": 58193.00000000001,
-      "boundary_max_ms": 60672.99999999999
+      "boundary_mean_ms": 1.0227272727271917,
+      "boundary_p95_ms": 19.99999999999602,
+      "boundary_max_ms": 20.000000000010232
     }
   }
 }
