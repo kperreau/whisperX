@@ -22,12 +22,16 @@ def native_int8_supported() -> bool:
     # products once rather than scanning every model weight at each cold start.
     weight = torch.tensor([[127] * 256] * 64 + [[-128] * 256] * 64, dtype=torch.int8)
     values = torch.full((16, 256), 255, dtype=torch.uint8)
-    packed = torch.ops.onednn.qlinear_prepack(weight, None)
-    output = torch.ops.onednn.qlinear_pointwise.tensor(
-        values, torch.tensor(1.), torch.tensor(0, dtype=torch.int64), packed,
-        torch.ones(128), torch.zeros(128, dtype=torch.int64), None,
-        1.0, 0, torch.float32, "none", [], "",
-    )
+    try:
+        packed = torch.ops.onednn.qlinear_prepack(weight, None)
+        output = torch.ops.onednn.qlinear_pointwise.tensor(
+            values, torch.tensor(1.), torch.tensor(0, dtype=torch.int64), packed,
+            torch.ones(128), torch.zeros(128, dtype=torch.int64), None,
+            1.0, 0, torch.float32, "none", [], "",
+        )
+    except (AttributeError, RuntimeError):
+        # A build can include oneDNN without supporting these operators or ISA.
+        return False
     return torch.equal(output, values.float() @ weight.float().T)
 
 
@@ -182,6 +186,8 @@ def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool |
             expected, expected_lengths = model(waveforms, lengths)
             actual, actual_lengths = cached.infer(waveforms, lengths)
             torch.testing.assert_close(actual_lengths, expected_lengths)
+            if not torch.isfinite(expected).all():
+                raise RuntimeError("invalid reference alignment emissions")
             if actual.shape != expected.shape or not torch.isfinite(actual).all():
                 raise RuntimeError("invalid quantized alignment emissions")
             for index, length in enumerate(expected_lengths.tolist()):
@@ -190,7 +196,7 @@ def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool |
                     expected[index, :length].log_softmax(-1),
                     log_target=True, reduction="sum",
                 )
-                if divergence / max(1, length) > 0.1:
+                if not torch.isfinite(divergence) or divergence / max(1, length) > 0.1:
                     raise RuntimeError(
                         "quantized CTC posterior divergence exceeds 0.1 nat/frame: "
                         f"{divergence.item() / max(1, length):.4f} for "

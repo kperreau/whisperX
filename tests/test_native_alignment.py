@@ -181,6 +181,26 @@ class AlignCacheTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, error):
                     align_cache._verify_cache(self.eager, "unused")
 
+    def test_verification_rejects_invalid_reference_and_nonfinite_divergence(self):
+        waveforms, lengths = torch.zeros(1, 400), torch.tensor([400])
+        output_lengths = torch.tensor([1])
+        finite = torch.zeros(1, 1, 4)
+        extreme = torch.tensor([[[torch.finfo(torch.float32).max,
+                                  -torch.finfo(torch.float32).max, 0., 0.]]])
+        for expected, actual, error in (
+            (torch.full_like(finite, float("nan")), finite, "invalid reference"),
+            (torch.full_like(finite, float("inf")), finite, "invalid reference"),
+            (extreme, extreme, "posterior divergence"),
+        ):
+            with (
+                self.subTest(error=error, reference=expected),
+                mock.patch.object(align_cache, "_verification_inputs", return_value=[(waveforms, lengths)]),
+                mock.patch.object(align_cache, "_CachedModel") as loader,
+            ):
+                reference = mock.Mock(model_type="torchaudio", return_value=(expected, output_lengths))
+                loader.return_value.infer.return_value = (actual, output_lengths)
+                with self.assertRaisesRegex(RuntimeError, error):
+                    align_cache._verify_cache(reference, "unused")
 
 
 
@@ -224,6 +244,25 @@ class AlignCacheTest(unittest.TestCase):
 
 
 class Int8LinearTest(unittest.TestCase):
+    def test_kernel_probe_caches_fallback_when_native_operators_are_unavailable(self):
+        self.addCleanup(align_cache.native_int8_supported.cache_clear)
+        for stage in ("pack", "run"):
+            for error in (RuntimeError("unsupported CPU"), AttributeError("missing operator")):
+                align_cache.native_int8_supported.cache_clear()
+                with (
+                    self.subTest(stage=stage, error=type(error).__name__),
+                    mock.patch.object(torch.backends.mkldnn, "is_available", return_value=True),
+                    mock.patch.object(torch.ops.onednn, "qlinear_prepack",
+                                      side_effect=error if stage == "pack" else None,
+                                      return_value=torch.empty(0)) as pack,
+                    mock.patch.object(torch.ops.onednn.qlinear_pointwise, "tensor",
+                                      side_effect=error if stage == "run" else None) as run,
+                ):
+                    self.assertFalse(align_cache.native_int8_supported())
+                    self.assertFalse(align_cache.native_int8_supported())
+                    self.assertEqual(pack.call_count, 1)
+                    self.assertEqual(run.call_count, int(stage == "run"))
+
     def test_kernel_probe_is_cached_and_rejects_reduced_range_arithmetic(self):
         align_cache.native_int8_supported.cache_clear()
         self.addCleanup(align_cache.native_int8_supported.cache_clear)
