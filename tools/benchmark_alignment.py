@@ -62,8 +62,9 @@ def worker(args):
     model, metadata = load_align_model(args.language, 'cpu', model_name=args.model,
                                       quantize=args.variant == 'torch-int8',
                                       model_cache_only=True,
-                                      engine='onnx' if args.variant.startswith('onnx') else 'torch',
-                                      onnx_threads=args.threads)
+                                      engine=('native-int8' if args.variant == 'native-int8' else
+                                              'onnx' if args.variant.startswith('onnx') else 'torch'),
+                                      onnx_threads=args.threads, cpu_threads=args.threads)
     load_ms = (time.perf_counter()-started)*1000
     if args.variant == 'torch-int8' and not any(
             isinstance(module, torch.ao.nn.quantized.dynamic.Linear) for module in model.modules()):
@@ -155,6 +156,7 @@ def main():
     parser.add_argument('--model')
     parser.add_argument('--onnx-fp32')
     parser.add_argument('--onnx-int8')
+    parser.add_argument('--native-int8', help='Local native CPU alignment bundle')
     parser.add_argument('--threads', type=int, default=4)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--warmup', type=int, default=1)
@@ -178,6 +180,8 @@ def main():
     for name, path in [('onnx-fp32', args.onnx_fp32), ('onnx-int8', args.onnx_int8)]:
         if path:
             variants.extend([(name, path, 0), (name, path, 10)])
+    if args.native_int8:
+        variants.extend([('native-int8', args.native_int8, 0), ('native-int8', args.native_int8, 10)])
     records = []
     with tempfile.TemporaryDirectory(prefix='whisperx-bench-') as tmp:
         for duration in map(float, args.durations.split(',')):
