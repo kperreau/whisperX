@@ -11,6 +11,12 @@ from threading import Lock
 import torch
 from torch import nn
 
+try:
+    from whisperx_ext.quantization import dequantize_rows as _fused_dequantize_rows
+except ImportError:
+    # Existing wheels retain the same arithmetic through ordinary Tensor ops.
+    _fused_dequantize_rows = None
+
 _cache_load_lock = Lock()
 _CACHE_FORMAT_VERSION = 2
 
@@ -115,6 +121,14 @@ class Int8Linear(nn.Module):
         else:
             centered = quantized.to(torch.int16).sub_(128).to(torch.int8)
             product = torch._int_mm(centered, self._weight_transposed).float() + 128 * self._weight_sum
+        if self._packed is not None and _fused_dequantize_rows is not None and scale.dtype == torch.float32:
+            # NumPy views share CPU storage; Rust allocates only the final
+            # output, avoiding the large broadcast Tensor intermediates.
+            output = _fused_dequantize_rows(
+                product.numpy(), scale.numpy(), zero.numpy(), self.weight_scale.numpy(), self._weight_sum.numpy(),
+                self.bias.numpy() if self.bias is not None else None,
+            )
+            return torch.from_numpy(output).reshape(shape)
         output = (product - zero * self._weight_sum) * (scale * self.weight_scale)
         if self.bias is not None:
             output = output + self.bias

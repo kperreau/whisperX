@@ -96,7 +96,12 @@ Weights use symmetric per-channel scales with a seven-bit range (-63..63)
 stored as ordinary int8 tensors. Dynamic uint8 activation scales are computed
 per token, so unrelated outliers in another row cannot erase a quiet frame's
 resolution. oneDNN computes the integer product; row scales, zero-point
-corrections and channel scales reconstruct FP32 outputs.
+corrections and channel scales reconstruct FP32 outputs. The compiled
+`whisperx_ext.quantization` helper fuses this reconstruction and bias into one
+output allocation, using zero-copy CPU array views. It preserves the separate
+FP32 rounding of the Tensor operations. AVX2 is selected after a runtime CPU
+check; other CPUs use the portable kernel. Older extension wheels retain the
+Tensor implementation until rebuilt. Activation quantization stays in Torch.
 
 On AVX2 CPUs, U8S8 kernels can saturate adjacent products at 16 bits. Restricting
 weights to seven bits makes full-range uint8 activations safe without discarding
