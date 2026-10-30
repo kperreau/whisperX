@@ -82,7 +82,7 @@ class OnnxEmissionEngine:
 
 
 def get_emission_engine(model, metadata) -> EmissionEngine:
-    if metadata["type"] in {"onnx", "native-int8", "custom"}:
+    if metadata["type"] in {"onnx", "native-int8", "native-fp32", "custom"}:
         return model
     stride, receptive_field = 320, 400
     if metadata["type"] == "huggingface":

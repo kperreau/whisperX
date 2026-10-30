@@ -71,9 +71,12 @@ remains available after validation on the target CPU.
 
 `native-int8` bundles store ordinary integer/float weights and model structure.
 They use native Torch convolution/attention and oneDNN linear kernels, without
-TorchScript or deprecated PyTorch QTensor creation. Loading uses memory mapping
-and a weights-only unpickler with an explicit allowlist of model classes. It
-does not construct a model, quantize weights or contact a model hub at startup.
+TorchScript or deprecated PyTorch QTensor creation. Loading reads the weights
+into ordinary memory through a weights-only unpickler with an explicit allowlist
+of model classes. It does not construct a model, quantize weights or contact a
+model hub at startup. Memory-mapped weights would load faster but page-fault
+during the first forward, which measured 1.3 s slower to the first emissions
+(FP32, 10 s of audio) in a gVisor-sandboxed Scaleway job.
 
 ```python
 from whisperx.alignment_native import export_native_alignment
@@ -92,22 +95,46 @@ remain within 0.1 nat/frame of the source FP32 CTC posterior on fixed short,
 variable-duration and unequal-length inputs. This numerical check does not replace
 real-speech timestamp and deployment-memory tests.
 
-Weights use symmetric per-channel int8 scales and activations use dynamic uint8
-scales. The English Torchaudio `WAV2VEC2_ASR_BASE_960H` profile keeps its first
-encoder block in FP32 to preserve word boundaries. The French Torchaudio
+Weights use symmetric per-channel int8 scales. Activations use dynamic 7-bit
+codes (0–127) with an asymmetric scale and zero point per row (per frame), so a
+loud frame no longer coarsens the codes of every quiet frame in the batch. A
+seven-bit code times an int8 weight keeps each pair of products inside the signed
+16-bit intermediates of AVX2 kernels without VNNI (`2 × 127 × 128 < 2^15`): oneDNN
+computes the exact int32 products on every x86 CPU, from AVX2-only hosts to
+AVX-512 VNNI and AMX, and the integer fallback (`torch._int_mm`, used where
+oneDNN is unavailable, notably macOS ARM) computes the same integers. Bundles
+therefore have one profile, and their timestamps do not depend on the host
+kernel. Export checks that the host's oneDNN kernel matches the exact integer
+path, in addition to the FP32 posterior check.
+
+Per-row quantization and its dequantization (zero-point correction, row scale
+and bias) run in the `whisperx_ext.quant` Rust kernels, one fused pass each and
+bit-identical to the Torch reference `quantize_rows_reference` /
+`dequantize_rows_reference`, which a source checkout without the extension uses.
+oneDNN receives unit scales; the GEMM itself stays in oneDNN.
+
+The English Torchaudio `WAV2VEC2_ASR_BASE_960H` profile keeps its first encoder
+block in FP32 to preserve word boundaries. The French Torchaudio
 `VOXPOPULI_ASR_BASE_10K_FR` profile keeps its input projection and encoder block
-5 in FP32 with oneDNN to preserve long-narration boundaries. The exact integer
-fallback keeps only the input projection in FP32. The bundle stores a quantized
-alternative only for block 5 and selects it once during loading; unused tensor
-pages remain mapped without being touched. Export verifies both profiles.
-Explicit `float_prefixes` apply identically to both kernels. Other models can select float module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
-A one-time arithmetic probe checks full-range oneDNN products on the host CPU;
-hosts without a correct kernel use exact integer matrix multiplication instead.
-Speed depends on the CPU and kernel. Benchmark the deployment hardware.
+5 in FP32 to preserve long-narration boundaries. Other models can select float
+module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
+A one-time arithmetic probe checks the largest products a bundle can produce on
+the host CPU; hosts without a correct kernel use exact integer matrix
+multiplication instead. Speed depends on the CPU and kernel: CPUs without VNNI
+gain less from int8. Benchmark the deployment hardware.
+
+`export_native_alignment(model, metadata, path, precision="fp32")` writes a
+`native-fp32` bundle instead: the source model itself, without quantization,
+loaded with `engine="native-fp32"`. It skips constructing and randomly
+initializing the model before its checkpoint overwrites the weights, which
+dominates FP32 loading (1.9–2.3 s against 0.5–0.7 s for the bundle on a
+2-vCPU Scaleway job, with the same forward time). Export requires its emissions to be bitwise identical to the
+source model's, so its timestamps equal `engine="torch"`.
 
 Rebuild bundles when changing the pinned Torch, TorchAudio or Transformers stack.
-CPU cache format version 1 is independent of ONNX bundles. The CLI accepts
-`--align_engine native-int8 --align_model /tmp/en-native`; pass
+CPU cache format version 2 is independent of ONNX bundles; version 1 bundles
+(per-tensor 8-bit activations) are rejected and must be re-exported. The CLI accepts
+`--align_engine native-int8` (or `native-fp32`) `--align_model /tmp/en-native`; pass
 `--align_chunk_seconds 0` for full context. The benchmark helper accepts
 `--native-int8 /tmp/en-native` alongside its existing Torch/ONNX variants.
 
