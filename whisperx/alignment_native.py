@@ -182,9 +182,12 @@ class _CachedModel:
         if cpu_threads > 0 and torch.get_num_threads() != cpu_threads:
             torch.set_num_threads(cpu_threads)
         # The explicit allowlist restores model structure without executing its
-        # constructors or accepting arbitrary pickle globals. Weights stay mapped.
+        # constructors or accepting arbitrary pickle globals. Weights are read
+        # into anonymous memory: mapped weights page-fault during the first
+        # forward instead, which measured 1.3 s slower to the first emissions
+        # (FP32, 10 s of audio) in a gVisor-sandboxed Scaleway job.
         with _cache_load_lock, torch.serialization.safe_globals(cache_globals(model_type)):
-            cache = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+            cache = torch.load(path, map_location="cpu", weights_only=True)
         if cache["format"] != CACHE_FORMAT_VERSION:
             raise RuntimeError("unsupported CPU alignment cache format; re-export the native bundle")
         if cache["model_type"] != model_type:

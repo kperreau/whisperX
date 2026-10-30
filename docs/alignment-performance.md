@@ -71,9 +71,12 @@ remains available after validation on the target CPU.
 
 `native-int8` bundles store ordinary integer/float weights and model structure.
 They use native Torch convolution/attention and oneDNN linear kernels, without
-TorchScript or deprecated PyTorch QTensor creation. Loading uses memory mapping
-and a weights-only unpickler with an explicit allowlist of model classes. It
-does not construct a model, quantize weights or contact a model hub at startup.
+TorchScript or deprecated PyTorch QTensor creation. Loading reads the weights
+into ordinary memory through a weights-only unpickler with an explicit allowlist
+of model classes. It does not construct a model, quantize weights or contact a
+model hub at startup. Memory-mapped weights would load faster but page-fault
+during the first forward, which measured 1.3 s slower to the first emissions
+(FP32, 10 s of audio) in a gVisor-sandboxed Scaleway job.
 
 ```python
 from whisperx.alignment_native import export_native_alignment
@@ -124,8 +127,8 @@ gain less from int8. Benchmark the deployment hardware.
 `native-fp32` bundle instead: the source model itself, without quantization,
 loaded with `engine="native-fp32"`. It skips constructing and randomly
 initializing the model before its checkpoint overwrites the weights, which
-dominates FP32 loading (2.2 s against 0.24 s for a mapped bundle on a 2-vCPU
-Scaleway job). Export requires its emissions to be bitwise identical to the
+dominates FP32 loading (1.9–2.3 s against 0.5–0.7 s for the bundle on a
+2-vCPU Scaleway job, with the same forward time). Export requires its emissions to be bitwise identical to the
 source model's, so its timestamps equal `engine="torch"`.
 
 Rebuild bundles when changing the pinned Torch, TorchAudio or Transformers stack.

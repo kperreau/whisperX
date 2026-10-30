@@ -64,7 +64,7 @@ class AlignCacheTest(unittest.TestCase):
         with mock.patch.object(torch, "load", wraps=torch.load) as load:
             cached = align_cache._CachedModel(self.path, cpu_threads=1)
             self.assertTrue(load.call_args.kwargs["weights_only"])
-            self.assertTrue(load.call_args.kwargs["mmap"])
+            self.assertFalse(load.call_args.kwargs.get("mmap", False))
         layers = [layer for layer in cached.model.modules() if isinstance(layer, align_cache.Int8Linear)]
         self.assertGreater(len(layers), 0)
         self.assertTrue(all(layer.qweight.dtype == torch.int8 for layer in layers))
