@@ -115,13 +115,13 @@ class AlignCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "english")
             eager = copy.deepcopy(self.eager)
-            eager.encoder.transformer.layers.append(copy.deepcopy(eager.encoder.transformer.layers[0]))
+            eager.encoder.transformer.layers.extend(copy.deepcopy(eager.encoder.transformer.layers[0]) for _ in range(2))
             align_cache.export_native_alignment(eager, metadata, path)
             engine = align_cache.NativeEmissionEngine(path)
             self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, torch.nn.Linear)
             self.assertIn("encoder.transformer.layers.0", engine.metadata["float_prefixes"])
             self.assertIsInstance(engine.model.encoder.transformer.layers[1].attention.q_proj, torch.nn.Linear)
-            self.assertIsInstance(engine.model.encoder.transformer.layers[1].feed_forward.intermediate_dense,
+            self.assertIsInstance(engine.model.encoder.transformer.layers[2].feed_forward.intermediate_dense,
                                   align_cache.Int8Linear)
             with self.assertRaisesRegex(ValueError, "prefix"):
                 align_cache.export_native_alignment(self.eager, metadata, Path(directory, "bad"),

@@ -255,7 +255,7 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     """Bake a verified CPU int8 bundle from an unquantized Torch CTC model.
 
     Known Torchaudio checkpoints keep attention, input and vocabulary projections
-    in FP32. English also retains its first encoder block. Feed-forward weights
+    in FP32. English also retains its first two encoder blocks. Feed-forward weights
     use AVX2-safe seven-bit symmetric quantization in int8 storage, with dynamic
     per-token uint8 activations. Both kernels share one profile; export verifies
     the host-selected kernel.
@@ -276,7 +276,7 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
             prefixes = ["encoder.feature_projection.projection", "aux"]
             prefixes.extend(name for name, _ in model.named_modules() if name.endswith(".attention"))
             if metadata["model_name"] == "WAV2VEC2_ASR_BASE_960H":
-                prefixes.append("encoder.transformer.layers.0")
+                prefixes.extend(("encoder.transformer.layers.0", "encoder.transformer.layers.1"))
             float_prefixes = tuple(prefixes)
         else:
             float_prefixes = ()

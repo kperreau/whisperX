@@ -108,7 +108,7 @@ engine, rather than silently running the fallback.
 
 The English and French Torchaudio profiles keep attention, input projection and
 the vocabulary projection in FP32, quantizing the large feed-forward layers.
-English also retains its first encoder block. Preserving these sensitive layers
+English also retains its first two encoder blocks. Preserving these sensitive layers
 protects CTC boundaries; complete word presence alone does not establish timing
 fidelity. Both CPU kernels use the same profile, with no alternative model pages.
 Explicit `float_prefixes` override these defaults for separately validated models.
