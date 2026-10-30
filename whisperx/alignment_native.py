@@ -12,15 +12,16 @@ import torch
 from torch import nn
 
 _cache_load_lock = Lock()
+_CACHE_FORMAT_VERSION = 2
 
 
 @lru_cache(maxsize=1)
 def native_int8_supported() -> bool:
     if not torch.backends.mkldnn.is_available():
         return False
-    # Some older ISA kernels reduce signed weights internally. Check full-range
-    # products once rather than scanning every model weight at each cold start.
-    weight = torch.tensor([[127] * 256] * 64 + [[-128] * 256] * 64, dtype=torch.int8)
+    # Seven-bit weights avoid 16-bit pair saturation in AVX2 U8S8 kernels,
+    # while retaining the full uint8 activation range.
+    weight = torch.tensor([[63] * 256] * 64 + [[-64] * 256] * 64, dtype=torch.int8)
     values = torch.full((16, 256), 255, dtype=torch.uint8)
     try:
         packed = torch.ops.onednn.qlinear_prepack(weight, None)
@@ -86,37 +87,37 @@ class Int8Linear(nn.Module):
         self._packed = None
 
     def prepare(self, *, integer_fallback: bool = False) -> None:
+        self._weight_sum = self.qweight.sum(dim=1, dtype=torch.int32)
         if not integer_fallback and native_int8_supported():
             self._packed = torch.ops.onednn.qlinear_prepack(self.qweight, None)
             self._weight_zero = torch.zeros(self.out_features, dtype=torch.int64)
+            self._unit_scales = torch.ones(self.out_features)
+            self._activation_scale = torch.tensor(1.)
+            self._activation_zero = torch.tensor(0, dtype=torch.int64)
         else:
             self._packed = None
-            # Development platforms without oneDNN (notably macOS ARM) use
-            # the same integer arithmetic, with no legacy quantizer.
             self._weight_transposed = self.qweight.t().contiguous()
-            self._weight_sum = self.qweight.sum(dim=1, dtype=torch.int32)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         shape = (*values.shape[:-1], self.out_features)
         values = values.reshape(-1, self.in_features).contiguous()
-        minimum, maximum = torch.aminmax(values)
-        minimum = minimum.clamp_max(0)
-        maximum = maximum.clamp_min(0)
+        minimum = values.amin(dim=1, keepdim=True).clamp_max(0)
+        maximum = values.amax(dim=1, keepdim=True).clamp_min(0)
         scale = ((maximum - minimum) / 255).clamp_min(torch.finfo(torch.float32).eps)
-        zero = (-minimum / scale).round().clamp(0, 255).to(torch.int64)
+        zero = (-minimum / scale).round().clamp(0, 255)
         quantized = (values / scale).round().add_(zero).clamp_(0, 255).to(torch.uint8)
         if self._packed is not None:
-            output = torch.ops.onednn.qlinear_pointwise.tensor(
-                quantized, scale, zero, self._packed, self.weight_scale,
-                self._weight_zero, self.bias, 1.0, 0, torch.float32, "none", [], "",
+            product = torch.ops.onednn.qlinear_pointwise.tensor(
+                quantized, self._activation_scale, self._activation_zero,
+                self._packed, self._unit_scales, self._weight_zero, None,
+                1.0, 0, torch.float32, "none", [], "",
             )
         else:
             centered = quantized.to(torch.int16).sub_(128).to(torch.int8)
-            product = torch._int_mm(centered, self._weight_transposed)
-            product = product + (128 - zero).to(torch.int32) * self._weight_sum
-            output = product.to(torch.float32) * (scale * self.weight_scale)
-            if self.bias is not None:
-                output = output + self.bias
+            product = torch._int_mm(centered, self._weight_transposed).float() + 128 * self._weight_sum
+        output = (product - zero * self._weight_sum) * (scale * self.weight_scale)
+        if self.bias is not None:
+            output = output + self.bias
         return output.reshape(shape)
 
 
@@ -129,15 +130,12 @@ class _CachedModel:
         # constructors or accepting arbitrary pickle globals. Weights stay mapped.
         with _cache_load_lock, torch.serialization.safe_globals(cache_globals(model_type)):
             cache = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
-        if cache["format"] != 1:
-            raise RuntimeError("unsupported CPU alignment cache format")
+        if cache["format"] != _CACHE_FORMAT_VERSION:
+            raise RuntimeError("unsupported CPU alignment cache format; rebuild the native bundle")
         if cache["model_type"] != model_type:
             raise RuntimeError("CPU alignment cache model type mismatch")
         self.integer_fallback = not native_int8_supported() if integer_fallback is None else integer_fallback
         self.model = cache["model"]
-        if self.integer_fallback:
-            for name, module in cache.get("integer_fallback_modules", {}).items():
-                self.model.set_submodule(name, module)
         self.model.requires_grad_(False).eval()
         if not any(isinstance(layer, Int8Linear) for layer in self.model.modules()):
             raise RuntimeError("alignment cache contains no quantized linear layers")
@@ -215,9 +213,9 @@ def _quantize_linears(model: nn.Module, float_prefixes: tuple[str, ...] = ()) ->
             continue
         weight = module.weight.detach().cpu()
         # Symmetric endpoints avoid giving negative weights a different range.
-        scale = (weight.abs().amax(dim=1) / 127).clamp_min(torch.finfo(torch.float32).eps)
+        scale = (weight.abs().amax(dim=1) / 63).clamp_min(torch.finfo(torch.float32).eps)
         replacement = Int8Linear(module.in_features, module.out_features, module.bias is not None)
-        replacement.qweight.copy_((weight / scale[:, None]).round().clamp(-127, 127).to(torch.int8))
+        replacement.qweight.copy_((weight / scale[:, None]).round().clamp(-63, 63).to(torch.int8))
         replacement.weight_scale.copy_(scale)
         if module.bias is not None:
             replacement.bias.copy_(module.bias.detach())
@@ -227,30 +225,16 @@ def _quantize_linears(model: nn.Module, float_prefixes: tuple[str, ...] = ()) ->
 
 
 def _bake_cache(model: torch.nn.Module, model_type: str, path: str, *,
-                float_prefixes: tuple[str, ...] = (),
-                integer_fallback_prefixes: tuple[str, ...] = ()) -> None:
+                float_prefixes: tuple[str, ...] = ()) -> None:
     model.eval().cpu().float()
     materialize_weights(model)
     cached = copy.deepcopy(model)
     if not _quantize_linears(cached, float_prefixes):
         raise RuntimeError("alignment cache contains no quantized linear layers")
-    # Only the kernel-sensitive modules are duplicated. The rest of the bundle
-    # stays shared, and loading never touches unused alternative tensor pages.
-    alternatives = {}
-    for prefix in integer_fallback_prefixes:
-        alternative = copy.deepcopy(cached.get_submodule(prefix))
-        if not _quantize_linears(alternative):
-            raise RuntimeError("integer fallback profile contains no linear layers")
-        alternatives[prefix] = alternative.requires_grad_(False).eval()
-    torch.save({"format": 1, "model_type": model_type,
-                "model": cached.requires_grad_(False).eval(),
-                "integer_fallback_modules": alternatives}, path)
+    torch.save({"format": _CACHE_FORMAT_VERSION, "model_type": model_type,
+                "model": cached.requires_grad_(False).eval()}, path)
     reference = _ReferenceModel(model, model_type)
-    if alternatives:
-        _verify_cache(reference, path, integer_fallback=False)
-        _verify_cache(reference, path, integer_fallback=True)
-    else:
-        _verify_cache(reference, path)
+    _verify_cache(reference, path)
 
 
 class NativeEmissionEngine(_CachedModel):
@@ -259,23 +243,22 @@ class NativeEmissionEngine(_CachedModel):
     def __init__(self, path, *, threads=0):
         path = Path(path)
         self.metadata = json.loads((path / "metadata.json").read_text())
-        if self.metadata.get("format_version") != 1 or self.metadata.get("type") != "native-int8":
-            raise ValueError("Unsupported native int8 alignment bundle format")
+        if self.metadata.get("format_version") != _CACHE_FORMAT_VERSION or self.metadata.get("type") != "native-int8":
+            raise ValueError("Unsupported native int8 alignment bundle format; rebuild the native bundle")
         self.stride = self.metadata["stride"]
         self.receptive_field = self.metadata["receptive_field"]
         super().__init__(str(path / "model.int8.pt"), threads,
                          model_type=self.metadata["model_type"])
-        if self.integer_fallback and "integer_fallback_float_prefixes" in self.metadata:
-            self.metadata["float_prefixes"] = self.metadata["integer_fallback_float_prefixes"]
 
 
 def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None):
     """Bake a verified CPU int8 bundle from an unquantized Torch CTC model.
 
-    Known Torchaudio checkpoints retain sensitive layers in FP32: the first
-    encoder block for English base, and the input projection plus a middle encoder
-    block for French VoxPopuli with oneDNN. The exact integer fallback retains only
-    the French input projection; both kernel profiles are verified during export.
+    Known Torchaudio checkpoints keep attention, input and vocabulary projections
+    in FP32. English also retains its first encoder block. Feed-forward weights
+    use AVX2-safe seven-bit symmetric quantization in int8 storage, with dynamic
+    per-token uint8 activations. Both kernels share one profile; export verifies
+    the host-selected kernel.
     Callers can explicitly choose float module prefixes for other models.
     Export never downloads a checkpoint and refuses an existing output directory.
     """
@@ -285,16 +268,18 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
         raise ValueError("Export requires a Torch torchaudio or huggingface model")
     if any(type(layer).__module__.startswith("torch.ao.nn.quantized") for layer in model.modules()):
         raise ValueError("Export requires an unquantized Torch CTC model")
-    integer_fallback_prefixes = ()
     if float_prefixes is None:
-        profiles = {
-            "WAV2VEC2_ASR_BASE_960H": ("encoder.transformer.layers.0",),
-            "VOXPOPULI_ASR_BASE_10K_FR": ("encoder.feature_projection.projection",
-                                              "encoder.transformer.layers.5"),
-        }
-        float_prefixes = profiles.get(metadata.get("model_name"), ()) if metadata["type"] == "torchaudio" else ()
-        if metadata["type"] == "torchaudio" and metadata.get("model_name") == "VOXPOPULI_ASR_BASE_10K_FR":
-            integer_fallback_prefixes = ("encoder.transformer.layers.5",)
+        # Keep attention and the vocabulary projection in FP32: small score
+        # changes can move a CTC boundary even when every word is still present.
+        known = {"WAV2VEC2_ASR_BASE_960H", "VOXPOPULI_ASR_BASE_10K_FR"}
+        if metadata["type"] == "torchaudio" and metadata.get("model_name") in known:
+            prefixes = ["encoder.feature_projection.projection", "aux"]
+            prefixes.extend(name for name, _ in model.named_modules() if name.endswith(".attention"))
+            if metadata["model_name"] == "WAV2VEC2_ASR_BASE_960H":
+                prefixes.append("encoder.transformer.layers.0")
+            float_prefixes = tuple(prefixes)
+        else:
+            float_prefixes = ()
     module_names = dict(model.named_modules())
     if any(prefix not in module_names for prefix in float_prefixes):
         raise ValueError("Float module prefix does not exist in the model")
@@ -302,17 +287,13 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     _bake_cache(model, metadata["type"], str(output_dir / "model.int8.pt"),
-                float_prefixes=tuple(float_prefixes),
-                integer_fallback_prefixes=integer_fallback_prefixes)
+                float_prefixes=tuple(float_prefixes))
     bundle_metadata = {**metadata, "type": "native-int8", "model_type": metadata["type"],
-                       "format_version": 1, "stride": geometry.stride,
+                       "format_version": _CACHE_FORMAT_VERSION, "stride": geometry.stride,
                        "receptive_field": geometry.receptive_field,
-                       "quantization": "native-symmetric-per-channel-int8",
+                       "quantization": "native-per-channel-int8-w7-per-token-u8",
+                       "weight_qmax": 63, "activation_qmax": 255,
                        "float_prefixes": list(float_prefixes)}
-    if integer_fallback_prefixes:
-        bundle_metadata["integer_fallback_float_prefixes"] = [
-            prefix for prefix in float_prefixes if prefix not in integer_fallback_prefixes
-        ]
     (output_dir / "metadata.json").write_text(
         json.dumps(bundle_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )

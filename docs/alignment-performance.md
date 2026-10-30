@@ -92,22 +92,36 @@ remain within 0.1 nat/frame of the source FP32 CTC posterior on fixed short,
 variable-duration and unequal-length inputs. This numerical check does not replace
 real-speech timestamp and deployment-memory tests.
 
-Weights use symmetric per-channel int8 scales and activations use dynamic uint8
-scales. The English Torchaudio `WAV2VEC2_ASR_BASE_960H` profile keeps its first
-encoder block in FP32 to preserve word boundaries. The French Torchaudio
-`VOXPOPULI_ASR_BASE_10K_FR` profile keeps its input projection and encoder block
-5 in FP32 with oneDNN to preserve long-narration boundaries. The exact integer
-fallback keeps only the input projection in FP32. The bundle stores a quantized
-alternative only for block 5 and selects it once during loading; unused tensor
-pages remain mapped without being touched. Export verifies both profiles.
-Explicit `float_prefixes` apply identically to both kernels. Other models can select float module prefixes through `export_native_alignment(..., float_prefixes=(...))`.
-A one-time arithmetic probe checks full-range oneDNN products on the host CPU;
-hosts without a correct kernel use exact integer matrix multiplication instead.
-Speed depends on the CPU and kernel. Benchmark the deployment hardware.
+Weights use symmetric per-channel scales with a seven-bit range (-63..63)
+stored as ordinary int8 tensors. Dynamic uint8 activation scales are computed
+per token, so unrelated outliers in another row cannot erase a quiet frame's
+resolution. oneDNN computes the integer product; row scales, zero-point
+corrections and channel scales reconstruct FP32 outputs.
 
-Rebuild bundles when changing the pinned Torch, TorchAudio or Transformers stack.
-CPU cache format version 1 is independent of ONNX bundles. The CLI accepts
-`--align_engine native-int8 --align_model /tmp/en-native`; pass
+On AVX2 CPUs, U8S8 kernels can saturate adjacent products at 16 bits. Restricting
+weights to seven bits makes full-range uint8 activations safe without discarding
+their eighth bit or computing two matrix products. A cached arithmetic probe
+checks both signs and extreme values before selecting oneDNN. Platforms without
+that verified kernel retain an exact integer fallback. Applications with strict
+latency budgets should require `native_int8_supported()` before selecting this
+engine, rather than silently running the fallback.
+
+The English and French Torchaudio profiles keep attention, input projection and
+the vocabulary projection in FP32, quantizing the large feed-forward layers.
+English also retains its first encoder block. Preserving these sensitive layers
+protects CTC boundaries; complete word presence alone does not establish timing
+fidelity. Both CPU kernels use the same profile, with no alternative model pages.
+Explicit `float_prefixes` override these defaults for separately validated models.
+
+Cache format version **2** records this quantization contract. Version 1 bundles
+are rejected with a rebuild error; they must not be run through an AVX2-safe
+kernel probe while still containing full-range weights. Rebuild bundles when
+changing the pinned Torch, TorchAudio or Transformers stack. Export checks the
+host-selected kernel against FP32 CTC posteriors; the offline platform test matrix
+also checks the exact integer fallback. Real-speech timestamp and resource checks
+remain necessary on deployment hardware.
+
+The CLI accepts `--align_engine native-int8 --align_model /tmp/en-native`; pass
 `--align_chunk_seconds 0` for full context. The benchmark helper accepts
 `--native-int8 /tmp/en-native` alongside its existing Torch/ONNX variants.
 

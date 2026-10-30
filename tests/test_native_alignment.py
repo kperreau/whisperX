@@ -44,6 +44,9 @@ class AlignCacheTest(unittest.TestCase):
     def test_cache_preserves_dynamic_batches_lengths_and_ctc_posteriors(self):
         align_cache._verify_cache(self.eager, self.path)
 
+    def test_exact_integer_fallback_preserves_ctc_posteriors(self):
+        align_cache._verify_cache(self.eager, self.path, integer_fallback=True)
+
     def test_cache_restores_structure_without_reinitializing_the_model(self):
         with mock.patch.object(torchaudio.models, "wav2vec2_model", side_effect=AssertionError("model reconstruction")):
             cached = align_cache._CachedModel(self.path)
@@ -87,7 +90,7 @@ class AlignCacheTest(unittest.TestCase):
                 )
                 self.assertIs(get_emission_engine(engine, actual_metadata), engine)
                 self.assertEqual(actual_metadata["model_type"], "torchaudio")
-                self.assertEqual(actual_metadata["quantization"], "native-symmetric-per-channel-int8")
+                self.assertEqual(actual_metadata["quantization"], "native-per-channel-int8-w7-per-token-u8")
                 with mock.patch.object(engine, "infer", wraps=engine.infer) as run:
                     result = infer_emissions([torch.zeros(8000)], engine, "cpu", chunk_seconds=None)
                     self.assertEqual(result[0].shape, (24, 4))
@@ -111,45 +114,38 @@ class AlignCacheTest(unittest.TestCase):
         metadata = {"language": "en", "type": "torchaudio", "model_name": "WAV2VEC2_ASR_BASE_960H"}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "english")
-            align_cache.export_native_alignment(self.eager, metadata, path)
+            eager = copy.deepcopy(self.eager)
+            eager.encoder.transformer.layers.append(copy.deepcopy(eager.encoder.transformer.layers[0]))
+            align_cache.export_native_alignment(eager, metadata, path)
             engine = align_cache.NativeEmissionEngine(path)
             self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, torch.nn.Linear)
-            self.assertEqual(engine.metadata["float_prefixes"], ["encoder.transformer.layers.0"])
+            self.assertIn("encoder.transformer.layers.0", engine.metadata["float_prefixes"])
+            self.assertIsInstance(engine.model.encoder.transformer.layers[1].attention.q_proj, torch.nn.Linear)
+            self.assertIsInstance(engine.model.encoder.transformer.layers[1].feed_forward.intermediate_dense,
+                                  align_cache.Int8Linear)
             with self.assertRaisesRegex(ValueError, "prefix"):
                 align_cache.export_native_alignment(self.eager, metadata, Path(directory, "bad"),
                                                     float_prefixes=("does_not_exist",))
             with self.assertRaisesRegex(ValueError, "Torch"):
                 align_cache.export_native_alignment(self.eager, {"type": "custom"}, Path(directory, "bad"))
 
-    def test_known_french_checkpoint_preserves_sensitive_layers(self):
+    def test_known_french_checkpoint_preserves_attention_and_ctc_head_for_both_kernels(self):
         metadata = {"language": "fr", "type": "torchaudio", "model_name": "VOXPOPULI_ASR_BASE_10K_FR"}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "french")
-            eager = copy.deepcopy(self.eager)
-            eager.encoder.transformer.layers.extend(
-                copy.deepcopy(eager.encoder.transformer.layers[0]) for _ in range(5)
-            )
-            align_cache.export_native_alignment(eager, metadata, path)
+            align_cache.export_native_alignment(copy.deepcopy(self.eager), metadata, path)
+            manifest = json.loads((path / "metadata.json").read_text())
+            self.assertEqual(manifest["format_version"], 2)
+            self.assertEqual(manifest["weight_qmax"], 63)
+            self.assertEqual(manifest["activation_qmax"], 255)
             for fallback in (False, True):
                 engine = align_cache._CachedModel(path / "model.int8.pt", integer_fallback=fallback)
                 self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
-                self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
-                self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj,
-                                      align_cache.Int8Linear if fallback else torch.nn.Linear)
-                self.assertEqual(engine.integer_fallback, fallback)
-            with mock.patch.object(align_cache, "native_int8_supported", return_value=False):
-                engine = align_cache.NativeEmissionEngine(path)
-                self.assertEqual(engine.metadata["float_prefixes"], ["encoder.feature_projection.projection"])
-            manifest = json.loads((path / "metadata.json").read_text())
-            self.assertEqual(manifest["float_prefixes"],
-                             ["encoder.feature_projection.projection", "encoder.transformer.layers.5"])
-            self.assertEqual(manifest["integer_fallback_float_prefixes"], ["encoder.feature_projection.projection"])
-            explicit = Path(directory, "explicit")
-            align_cache.export_native_alignment(eager, metadata, explicit,
-                                                float_prefixes=tuple(manifest["float_prefixes"]))
-            fallback = align_cache._CachedModel(explicit / "model.int8.pt", integer_fallback=True)
-            self.assertIsInstance(fallback.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
-
+                self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, torch.nn.Linear)
+                self.assertIsInstance(engine.model.encoder.transformer.layers[0].feed_forward.intermediate_dense,
+                                      align_cache.Int8Linear)
+                self.assertIsInstance(engine.model.aux, torch.nn.Linear)
+            self.assertNotIn("integer_fallback_float_prefixes", manifest)
 
     def test_short_segment_preserves_zero_output_length_after_padding(self):
         cached = align_cache._CachedModel(self.path, cpu_threads=1)
@@ -208,7 +204,8 @@ class AlignCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory, "invalid.pt"))
             for payload, error in (({"format": 99}, "cache format"),
-                                   ({"format": 1, "model_type": "torchaudio", "model": torch.nn.Identity()}, "no quantized linear")):
+                                   ({"format": 1}, "rebuild"),
+                                   ({"format": 2, "model_type": "torchaudio", "model": torch.nn.Identity()}, "no quantized linear")):
                 torch.save(payload, path)
                 with self.assertRaisesRegex(RuntimeError, error):
                     align_cache._CachedModel(path)
@@ -221,7 +218,7 @@ class AlignCacheTest(unittest.TestCase):
             torch.save({"model": Path("unused")}, path)
             with self.assertRaises(pickle.UnpicklingError):
                 align_cache._CachedModel(path)
-            torch.save({"format": 1, "model_type": "huggingface"}, path)
+            torch.save({"format": 2, "model_type": "huggingface"}, path)
             with self.assertRaisesRegex(RuntimeError, "model type mismatch"):
                 align_cache._CachedModel(path)
 
@@ -263,10 +260,10 @@ class Int8LinearTest(unittest.TestCase):
                     self.assertEqual(pack.call_count, 1)
                     self.assertEqual(run.call_count, int(stage == "run"))
 
-    def test_kernel_probe_is_cached_and_rejects_reduced_range_arithmetic(self):
+    def test_kernel_probe_caches_verified_avx2_safe_reduced_range_arithmetic(self):
         align_cache.native_int8_supported.cache_clear()
         self.addCleanup(align_cache.native_int8_supported.cache_clear)
-        expected = torch.tensor([[255. * 256 * 127] * 64 + [255. * 256 * -128] * 64] * 16)
+        expected = torch.tensor([[255. * 256 * 63] * 64 + [255. * 256 * -64] * 64] * 16)
         with (
             mock.patch.object(torch.backends.mkldnn, "is_available", return_value=True),
             mock.patch.object(torch.ops.onednn, "qlinear_prepack", return_value=torch.empty(0)) as pack,
@@ -304,6 +301,24 @@ class Int8LinearTest(unittest.TestCase):
                 if bias:
                     expected += layer.bias
                 torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+    def test_per_token_activation_quantization_is_independent_of_other_rows(self):
+        layer = align_cache.Int8Linear(8, 4, False)
+        layer.qweight.copy_(torch.arange(-16, 16, dtype=torch.int8).reshape(4, 8))
+        layer.weight_scale.fill_(0.05)
+        layer.prepare(integer_fallback=True)
+        ordinary = torch.tensor([[-1., -.5, 0., .5, 1., 0., -.5, .5]])
+        expected = layer(ordinary).clone()
+        batch = torch.cat([ordinary, ordinary * 1_000_000, torch.zeros_like(ordinary)])
+        torch.testing.assert_close(layer(batch)[:1], expected, rtol=0, atol=0)
+
+    def test_exported_weights_are_bounded_for_non_vnni_kernels(self):
+        model = torch.nn.Sequential(torch.nn.Linear(8, 4))
+        with torch.no_grad():
+            model[0].weight.copy_(torch.linspace(-10, 10, 32).reshape(4, 8))
+        align_cache._quantize_linears(model)
+        self.assertLessEqual(model[0].qweight.abs().max().item(), 63)
+        self.assertEqual(model[0].qweight.dtype, torch.int8)
 
     def test_onednn_receives_ordinary_integer_tensors(self):
         layer = align_cache.Int8Linear(8, 4, False)
