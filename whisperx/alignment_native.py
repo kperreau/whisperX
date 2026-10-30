@@ -340,7 +340,7 @@ class NativeEmissionEngine(_CachedModel):
 def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None, precision="int8"):
     """Bake a verified CPU bundle from an unquantized Torch CTC model.
 
-    ``precision="fp32"`` stores the source model itself: loading it maps the
+    ``precision="fp32"`` stores the source model itself: loading it reads the
     weights without constructing and randomly initializing a model, and export
     checks that its emissions are bitwise identical to the source model's.
 
