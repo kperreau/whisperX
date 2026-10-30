@@ -110,6 +110,53 @@ class AlignCacheTest(unittest.TestCase):
                 with self.subTest(version=version), self.assertRaisesRegex(ValueError, "re-export"):
                     align_cache.NativeEmissionEngine(path)
 
+    def test_fp32_bundle_reproduces_the_source_model_bitwise_without_reconstruction(self):
+        metadata = {"language": "en", "type": "torchaudio", "model_name": "WAV2VEC2_ASR_BASE_960H",
+                    "dictionary": {"-": 0, "a": 1, "b": 2, "|": 3}}
+        eager = copy.deepcopy(self.eager)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "fp32")
+            align_cache.export_native_alignment(eager, metadata, path, precision="fp32")
+            self.assertEqual(sorted(entry.name for entry in path.iterdir()), ["metadata.json", "model.fp32.pt"])
+            manifest = json.loads((path / "metadata.json").read_text())
+            self.assertEqual((manifest["type"], manifest["model_type"]), ("native-fp32", "torchaudio"))
+            self.assertNotIn("quantization", manifest)
+            with (
+                mock.patch.object(torchaudio.models, "wav2vec2_model", side_effect=AssertionError("model reconstruction")),
+                mock.patch.object(align_cache, "native_int8_supported", side_effect=AssertionError("int8 probe")),
+            ):
+                engine, _ = load_align_model("en", "cpu", model_name=path, engine="native-fp32", cpu_threads=1)
+            self.assertFalse(any(isinstance(layer, align_cache.Int8Linear) for layer in engine.model.modules()))
+            self.assertIsNone(engine.integer_fallback)
+            waveforms, lengths = torch.randn(2, 16000, generator=torch.Generator().manual_seed(1)), torch.tensor([16000, 9000])
+            with torch.inference_mode():
+                expected = eager(waveforms, lengths)
+                actual = engine.infer(waveforms, lengths)
+            for left, right in zip(actual, expected, strict=True):
+                self.assertTrue(torch.equal(left, right))
+            with self.assertRaisesRegex(ValueError, "does not match engine"):
+                load_align_model("en", "cpu", model_name=path, engine="native-int8")
+            with self.assertRaisesRegex(RuntimeError, "precision mismatch"):
+                align_cache._CachedModel(path / "model.fp32.pt", precision="int8")
+            with self.assertRaisesRegex(ValueError, "float_prefixes"):
+                align_cache.export_native_alignment(eager, metadata, Path(directory, "bad"), precision="fp32",
+                                                    float_prefixes=())
+            with self.assertRaisesRegex(ValueError, "precision"):
+                align_cache.export_native_alignment(eager, metadata, Path(directory, "bad"), precision="fp16")
+
+    def test_fp32_verification_rejects_any_difference(self):
+        waveforms, lengths = torch.zeros(1, 400), torch.tensor([400])
+        with torch.inference_mode():
+            expected, output_lengths = self.eager(waveforms, lengths)
+        with (
+            mock.patch.object(align_cache, "_verification_inputs", return_value=[(waveforms, lengths)]),
+            mock.patch.object(align_cache, "_CachedModel") as loader,
+        ):
+            loader.return_value.integer_fallback = None
+            loader.return_value.infer.return_value = (expected + 1e-6, output_lengths)
+            with self.assertRaisesRegex(RuntimeError, "differs from the source"):
+                align_cache._verify_cache(self.eager, "unused", precision="fp32")
+
     def test_known_english_checkpoint_profile_and_invalid_exports(self):
         metadata = {"language": "en", "type": "torchaudio", "model_name": "WAV2VEC2_ASR_BASE_960H"}
         with tempfile.TemporaryDirectory() as directory:

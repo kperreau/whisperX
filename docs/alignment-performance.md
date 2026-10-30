@@ -120,10 +120,18 @@ the host CPU; hosts without a correct kernel use exact integer matrix
 multiplication instead. Speed depends on the CPU and kernel: CPUs without VNNI
 gain less from int8. Benchmark the deployment hardware.
 
+`export_native_alignment(model, metadata, path, precision="fp32")` writes a
+`native-fp32` bundle instead: the source model itself, without quantization,
+loaded with `engine="native-fp32"`. It skips constructing and randomly
+initializing the model before its checkpoint overwrites the weights, which
+dominates FP32 loading (2.2 s against 0.24 s for a mapped bundle on a 2-vCPU
+Scaleway job). Export requires its emissions to be bitwise identical to the
+source model's, so its timestamps equal `engine="torch"`.
+
 Rebuild bundles when changing the pinned Torch, TorchAudio or Transformers stack.
 CPU cache format version 2 is independent of ONNX bundles; version 1 bundles
 (per-tensor 8-bit activations) are rejected and must be re-exported. The CLI accepts
-`--align_engine native-int8 --align_model /tmp/en-native`; pass
+`--align_engine native-int8` (or `native-fp32`) `--align_model /tmp/en-native`; pass
 `--align_chunk_seconds 0` for full context. The benchmark helper accepts
 `--native-int8 /tmp/en-native` alongside its existing Torch/ONNX variants.
 

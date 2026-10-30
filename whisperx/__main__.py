@@ -31,7 +31,7 @@ def cli():
 
     # alignment params
     parser.add_argument("--align_model", default=None, help="Name of phoneme-level ASR model to do alignment")
-    parser.add_argument("--align_engine", choices=["torch", "onnx", "native-int8"], default="torch", help="CTC engine; ONNX and native-int8 require --align_model pointing to a local exported bundle.")
+    parser.add_argument("--align_engine", choices=["torch", "onnx", "native-int8", "native-fp32"], default="torch", help="CTC engine; ONNX and native bundles require --align_model pointing to a local exported bundle.")
     parser.add_argument("--align_chunk_seconds", type=float, default=10.0, help="Maximum core duration per CTC forward; 0 disables chunking. Adds one second of context on each side.")
     parser.add_argument("--align_diagnostics", action="store_true", help="Include unsupported characters and approximate alignment diagnostics in JSON output.")
     parser.add_argument("--align_strict", action="store_true", help="Reject unsupported characters instead of using wildcard scores.")

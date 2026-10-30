@@ -20,7 +20,7 @@ def test_cli_information_flags(flag, expected, monkeypatch, capsys):
     assert expected in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("engine", ["onnx", "native-int8"])
+@pytest.mark.parametrize("engine", ["onnx", "native-int8", "native-fp32"])
 def test_align_only_cli_passes_local_bundle_and_thread_limits(engine, monkeypatch, tmp_path):
     from unittest.mock import Mock
     import numpy as np

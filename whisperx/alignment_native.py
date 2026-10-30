@@ -178,7 +178,7 @@ class Int8Linear(nn.Module):
 
 class _CachedModel:
     def __init__(self, path: str, cpu_threads: int = 0, *, model_type: str = "torchaudio",
-                 integer_fallback: bool | None = None):
+                 integer_fallback: bool | None = None, precision: str = "int8"):
         if cpu_threads > 0 and torch.get_num_threads() != cpu_threads:
             torch.set_num_threads(cpu_threads)
         # The explicit allowlist restores model structure without executing its
@@ -189,19 +189,24 @@ class _CachedModel:
             raise RuntimeError("unsupported CPU alignment cache format; re-export the native bundle")
         if cache["model_type"] != model_type:
             raise RuntimeError("CPU alignment cache model type mismatch")
-        self.integer_fallback = not native_int8_supported() if integer_fallback is None else integer_fallback
+        if cache.get("precision", "int8") != precision:
+            raise RuntimeError("CPU alignment cache precision mismatch")
         self.model = cache["model"]
         self.model.requires_grad_(False).eval()
+        self.model_type = model_type
+        self.integer_fallback = None
+        if precision == "fp32":
+            return
+        self.integer_fallback = not native_int8_supported() if integer_fallback is None else integer_fallback
         if not any(isinstance(layer, Int8Linear) for layer in self.model.modules()):
             raise RuntimeError("alignment cache contains no quantized linear layers")
-        self.model_type = model_type
         for module in self.model.modules():
             if isinstance(module, Int8Linear):
                 module.prepare(integer_fallback=self.integer_fallback)
 
     def infer(self, waveforms: torch.Tensor, lengths: torch.Tensor):
         if waveforms.device.type != "cpu":
-            raise ValueError("Native int8 alignment supports device='cpu' only")
+            raise ValueError("Native alignment supports device='cpu' only")
         waveforms = waveforms.detach().cpu().contiguous()
         lengths = lengths.detach().cpu().contiguous()
         with torch.inference_mode():
@@ -231,9 +236,10 @@ def _verification_inputs():
         yield waveforms, lengths
 
 
-def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool | None = None) -> None:
+def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool | None = None,
+                  precision: str = "int8") -> None:
     model_type = getattr(model, "model_type", "torchaudio")
-    cached = _CachedModel(path, model_type=model_type, integer_fallback=integer_fallback)
+    cached = _CachedModel(path, model_type=model_type, integer_fallback=integer_fallback, precision=precision)
     # A host oneDNN kernel must reproduce the exact integer arithmetic.
     exact = (_CachedModel(path, model_type=model_type, integer_fallback=True)
              if cached.integer_fallback is False else None)
@@ -244,6 +250,9 @@ def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool |
             if exact is not None and not torch.allclose(actual, exact.infer(waveforms, lengths)[0],
                                                         rtol=1e-5, atol=1e-5):
                 raise RuntimeError("oneDNN int8 kernel disagrees with exact integer arithmetic "
+                                   f"for shape={tuple(waveforms.shape)}")
+            if precision == "fp32" and not torch.equal(actual, expected):
+                raise RuntimeError("FP32 alignment cache differs from the source model "
                                    f"for shape={tuple(waveforms.shape)}")
             torch.testing.assert_close(actual_lengths, expected_lengths)
             if not torch.isfinite(expected).all():
@@ -267,8 +276,6 @@ def _verify_cache(model: torch.nn.Module, path: str, *, integer_fallback: bool |
 def _quantize_linears(model: nn.Module, float_prefixes: tuple[str, ...] = ()) -> int:
     count = 0
     for name, module in list(model.named_modules()):
-        module._load_state_dict_pre_hooks.clear()
-        module._load_state_dict_post_hooks.clear()
         if not isinstance(module, torch.nn.Linear) or any(
             name == prefix or name.startswith(prefix + ".") for prefix in float_prefixes
         ):
@@ -287,35 +294,54 @@ def _quantize_linears(model: nn.Module, float_prefixes: tuple[str, ...] = ()) ->
 
 
 def _bake_cache(model: torch.nn.Module, model_type: str, path: str, *,
-                float_prefixes: tuple[str, ...] = ()) -> None:
+                float_prefixes: tuple[str, ...] = (), precision: str = "int8") -> None:
     model.eval().cpu().float()
     materialize_weights(model)
     cached = copy.deepcopy(model)
-    if not _quantize_linears(cached, float_prefixes):
+    for module in cached.modules():
+        # Checkpoint-compatibility hooks (weight_norm's, for one) are local
+        # functions: they cannot be pickled and a bundle never loads a state dict.
+        module._load_state_dict_pre_hooks.clear()
+        module._load_state_dict_post_hooks.clear()
+    if precision == "int8" and not _quantize_linears(cached, float_prefixes):
         raise RuntimeError("alignment cache contains no quantized linear layers")
-    torch.save({"format": CACHE_FORMAT_VERSION, "model_type": model_type,
+    torch.save({"format": CACHE_FORMAT_VERSION, "model_type": model_type, "precision": precision,
                 "model": cached.requires_grad_(False).eval()}, path)
-    _verify_cache(_ReferenceModel(model, model_type), path)
+    _verify_cache(_ReferenceModel(model, model_type), path, precision=precision)
+
+
+# Bundle type -> (weight precision, model file).
+_BUNDLES = {"native-int8": ("int8", "model.int8.pt"), "native-fp32": ("fp32", "model.fp32.pt")}
 
 
 class NativeEmissionEngine(_CachedModel):
-    """Load a local native int8 bundle without constructing or downloading models."""
+    """Load a local native bundle without constructing or downloading models.
+
+    An int8 bundle runs the int8 linear layers; an FP32 bundle runs the source
+    model unchanged, only loading faster than constructing it.
+    """
 
     def __init__(self, path, *, threads=0):
         path = Path(path)
         self.metadata = json.loads((path / "metadata.json").read_text())
-        if self.metadata.get("format_version") != CACHE_FORMAT_VERSION or self.metadata.get("type") != "native-int8":
-            raise ValueError("Unsupported native int8 alignment bundle format; re-export the bundle")
+        if (self.metadata.get("format_version") != CACHE_FORMAT_VERSION
+                or self.metadata.get("type") not in _BUNDLES):
+            raise ValueError("Unsupported native alignment bundle format; re-export the bundle")
         self.stride = self.metadata["stride"]
         self.receptive_field = self.metadata["receptive_field"]
-        super().__init__(str(path / "model.int8.pt"), threads,
-                         model_type=self.metadata["model_type"])
+        precision, filename = _BUNDLES[self.metadata["type"]]
+        super().__init__(str(path / filename), threads,
+                         model_type=self.metadata["model_type"], precision=precision)
 
 
-def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None):
-    """Bake a verified CPU int8 bundle from an unquantized Torch CTC model.
+def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None, precision="int8"):
+    """Bake a verified CPU bundle from an unquantized Torch CTC model.
 
-    Weights use symmetric per-channel int8 scales; activations use dynamic
+    ``precision="fp32"`` stores the source model itself: loading it maps the
+    weights without constructing and randomly initializing a model, and export
+    checks that its emissions are bitwise identical to the source model's.
+
+    For int8, weights use symmetric per-channel int8 scales; activations use dynamic
     per-row 7-bit codes, so oneDNN on any x86 CPU (AVX2 without VNNI included)
     and the exact integer fallback compute the same products from one profile.
     Known Torchaudio checkpoints retain sensitive layers in FP32: the first
@@ -330,7 +356,13 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
         raise ValueError("Export requires a Torch torchaudio or huggingface model")
     if any(type(layer).__module__.startswith("torch.ao.nn.quantized") for layer in model.modules()):
         raise ValueError("Export requires an unquantized Torch CTC model")
-    if float_prefixes is None:
+    if precision not in {"int8", "fp32"}:
+        raise ValueError("Native alignment precision must be int8 or fp32")
+    if precision == "fp32":
+        if float_prefixes is not None:
+            raise ValueError("FP32 bundles keep every layer in FP32; omit float_prefixes")
+        float_prefixes = ()
+    elif float_prefixes is None:
         profiles = {
             "WAV2VEC2_ASR_BASE_960H": ("encoder.transformer.layers.0",),
             "VOXPOPULI_ASR_BASE_10K_FR": ("encoder.feature_projection.projection",
@@ -343,14 +375,16 @@ def export_native_alignment(model, metadata, output_dir, *, float_prefixes=None)
     geometry = get_emission_engine(model, metadata)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
-    _bake_cache(model, metadata["type"], str(output_dir / "model.int8.pt"),
-                float_prefixes=tuple(float_prefixes))
-    bundle_metadata = {**metadata, "type": "native-int8", "model_type": metadata["type"],
+    bundle_type = f"native-{precision}"
+    _bake_cache(model, metadata["type"], str(output_dir / _BUNDLES[bundle_type][1]),
+                float_prefixes=tuple(float_prefixes), precision=precision)
+    bundle_metadata = {**metadata, "type": bundle_type, "model_type": metadata["type"],
                        "format_version": CACHE_FORMAT_VERSION, "stride": geometry.stride,
-                       "receptive_field": geometry.receptive_field,
-                       "quantization": "native-int8-per-channel-weights-7bit-per-row-activations",
-                       "activation_levels": ACTIVATION_LEVELS,
-                       "float_prefixes": list(float_prefixes)}
+                       "receptive_field": geometry.receptive_field}
+    if precision == "int8":
+        bundle_metadata.update({"quantization": "native-int8-per-channel-weights-7bit-per-row-activations",
+                                "activation_levels": ACTIVATION_LEVELS,
+                                "float_prefixes": list(float_prefixes)})
     (output_dir / "metadata.json").write_text(
         json.dumps(bundle_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
