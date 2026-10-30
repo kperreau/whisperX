@@ -87,7 +87,9 @@ class AlignCacheTest(unittest.TestCase):
                 )
                 self.assertIs(get_emission_engine(engine, actual_metadata), engine)
                 self.assertEqual(actual_metadata["model_type"], "torchaudio")
-                self.assertEqual(actual_metadata["quantization"], "native-symmetric-per-channel-int8")
+                self.assertEqual(actual_metadata["quantization"],
+                                 "native-int8-per-channel-weights-7bit-per-row-activations")
+                self.assertEqual(actual_metadata["activation_levels"], 127)
                 with mock.patch.object(engine, "infer", wraps=engine.infer) as run:
                     result = infer_emissions([torch.zeros(8000)], engine, "cpu", chunk_seconds=None)
                     self.assertEqual(result[0].shape, (24, 4))
@@ -102,10 +104,11 @@ class AlignCacheTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "local bundle"):
                 load_align_model("en", "cpu", engine="native-int8")
             description = json.loads((path / "metadata.json").read_text())
-            description["format_version"] = 99
-            (path / "metadata.json").write_text(json.dumps(description))
-            with self.assertRaisesRegex(ValueError, "bundle format"):
-                align_cache.NativeEmissionEngine(path)
+            for version in (1, 99):
+                description["format_version"] = version
+                (path / "metadata.json").write_text(json.dumps(description))
+                with self.subTest(version=version), self.assertRaisesRegex(ValueError, "re-export"):
+                    align_cache.NativeEmissionEngine(path)
 
     def test_known_english_checkpoint_profile_and_invalid_exports(self):
         metadata = {"language": "en", "type": "torchaudio", "model_name": "WAV2VEC2_ASR_BASE_960H"}
@@ -130,25 +133,19 @@ class AlignCacheTest(unittest.TestCase):
                 copy.deepcopy(eager.encoder.transformer.layers[0]) for _ in range(5)
             )
             align_cache.export_native_alignment(eager, metadata, path)
+            # Both kernels compute the same integers, so they share one profile.
             for fallback in (False, True):
                 engine = align_cache._CachedModel(path / "model.int8.pt", integer_fallback=fallback)
                 self.assertIsInstance(engine.model.encoder.feature_projection.projection, torch.nn.Linear)
                 self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, align_cache.Int8Linear)
-                self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj,
-                                      align_cache.Int8Linear if fallback else torch.nn.Linear)
+                self.assertIsInstance(engine.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
                 self.assertEqual(engine.integer_fallback, fallback)
             with mock.patch.object(align_cache, "native_int8_supported", return_value=False):
                 engine = align_cache.NativeEmissionEngine(path)
-                self.assertEqual(engine.metadata["float_prefixes"], ["encoder.feature_projection.projection"])
+                self.assertEqual(engine.metadata["float_prefixes"],
+                                 ["encoder.feature_projection.projection", "encoder.transformer.layers.5"])
             manifest = json.loads((path / "metadata.json").read_text())
-            self.assertEqual(manifest["float_prefixes"],
-                             ["encoder.feature_projection.projection", "encoder.transformer.layers.5"])
-            self.assertEqual(manifest["integer_fallback_float_prefixes"], ["encoder.feature_projection.projection"])
-            explicit = Path(directory, "explicit")
-            align_cache.export_native_alignment(eager, metadata, explicit,
-                                                float_prefixes=tuple(manifest["float_prefixes"]))
-            fallback = align_cache._CachedModel(explicit / "model.int8.pt", integer_fallback=True)
-            self.assertIsInstance(fallback.model.encoder.transformer.layers[5].attention.q_proj, torch.nn.Linear)
+            self.assertNotIn("integer_fallback_float_prefixes", manifest)
 
 
     def test_short_segment_preserves_zero_output_length_after_padding(self):
@@ -207,8 +204,11 @@ class AlignCacheTest(unittest.TestCase):
     def test_invalid_cache_format_and_empty_quantized_state_fail(self):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory, "invalid.pt"))
+            version = align_cache.CACHE_FORMAT_VERSION
             for payload, error in (({"format": 99}, "cache format"),
-                                   ({"format": 1, "model_type": "torchaudio", "model": torch.nn.Identity()}, "no quantized linear")):
+                                   ({"format": 1, "model_type": "torchaudio"}, "re-export"),
+                                   ({"format": version, "model_type": "torchaudio", "model": torch.nn.Identity()},
+                                    "no quantized linear")):
                 torch.save(payload, path)
                 with self.assertRaisesRegex(RuntimeError, error):
                     align_cache._CachedModel(path)
@@ -221,7 +221,7 @@ class AlignCacheTest(unittest.TestCase):
             torch.save({"model": Path("unused")}, path)
             with self.assertRaises(pickle.UnpicklingError):
                 align_cache._CachedModel(path)
-            torch.save({"format": 1, "model_type": "huggingface"}, path)
+            torch.save({"format": align_cache.CACHE_FORMAT_VERSION, "model_type": "huggingface"}, path)
             with self.assertRaisesRegex(RuntimeError, "model type mismatch"):
                 align_cache._CachedModel(path)
 
@@ -263,10 +263,11 @@ class Int8LinearTest(unittest.TestCase):
                     self.assertEqual(pack.call_count, 1)
                     self.assertEqual(run.call_count, int(stage == "run"))
 
-    def test_kernel_probe_is_cached_and_rejects_reduced_range_arithmetic(self):
+    def test_kernel_probe_is_cached_and_rejects_reduced_weight_arithmetic(self):
         align_cache.native_int8_supported.cache_clear()
         self.addCleanup(align_cache.native_int8_supported.cache_clear)
-        expected = torch.tensor([[255. * 256 * 127] * 64 + [255. * 256 * -128] * 64] * 16)
+        # The largest 7-bit code times the extreme weights, summed over 256 inputs.
+        expected = torch.tensor([[127. * 256 * 127] * 64 + [127. * 256 * -128] * 64] * 16)
         with (
             mock.patch.object(torch.backends.mkldnn, "is_available", return_value=True),
             mock.patch.object(torch.ops.onednn, "qlinear_prepack", return_value=torch.empty(0)) as pack,
@@ -292,18 +293,16 @@ class Int8LinearTest(unittest.TestCase):
                 layer.bias.copy_(torch.arange(4, dtype=torch.float32))
             with mock.patch.object(align_cache, "native_int8_supported", return_value=False):
                 layer.prepare()
-            signed = torch.tensor([[-128., -64., 0., 64., 127., 0., -64., 64.]]).repeat(2, 1)
-            signed_quantized = torch.tensor([[0., 64., 128., 192., 255., 128., 64., 192.]]).repeat(2, 1)
-            for values, dequantized in (
-                (torch.zeros(2, 8), torch.zeros(2, 8)),
-                (torch.ones(2, 8), torch.ones(2, 8)),
-                (signed, signed_quantized - 128),
-            ):
+            signed = torch.tensor([[-127., -64., 0., 63., 127., 0., -64., 64.]])
+            for values in (torch.zeros(2, 8), torch.ones(2, 8), signed.repeat(2, 1),
+                           torch.cat([signed, 1000 * signed, -signed.abs(), signed.abs()])):
+                codes, scale, zero = align_cache.quantize_rows_reference(values)
+                dequantized = (codes.float() - zero[:, None]) * scale[:, None]
                 actual = layer(values)
                 expected = dequantized @ (layer.qweight.float() * layer.weight_scale[:, None]).T
                 if bias:
                     expected += layer.bias
-                torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+                torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-4)
 
     def test_onednn_receives_ordinary_integer_tensors(self):
         layer = align_cache.Int8Linear(8, 4, False)
@@ -315,8 +314,73 @@ class Int8LinearTest(unittest.TestCase):
             mock.patch.object(torch.ops.onednn.qlinear_pointwise, "tensor", return_value=torch.zeros(2, 4)) as run,
         ):
             layer.prepare()
-            self.assertEqual(layer(torch.zeros(2, 8)).shape, (2, 4))
-            self.assertEqual(run.call_args.args[0].dtype, torch.uint8)
-            self.assertFalse(run.call_args.args[0].is_quantized)
+            self.assertEqual(layer(torch.randn(2, 8) * 100).shape, (2, 4))
+            codes, scale, zero = run.call_args.args[:3]
+            self.assertEqual(codes.dtype, torch.uint8)
+            self.assertFalse(codes.is_quantized)
+            self.assertLessEqual(int(codes.max()), align_cache.ACTIVATION_LEVELS)
+            # Per-row scales and zero points are applied after the GEMM.
+            self.assertEqual((scale.item(), zero.item()), (1.0, 0))
+
+
+class RowQuantizationTest(unittest.TestCase):
+    def test_codes_fit_avx2_pair_sums_without_vnni(self):
+        # vpmaddubsw adds two u8 x s8 products in a signed 16-bit lane.
+        largest = 2 * align_cache.ACTIVATION_LEVELS * 128
+        self.assertLess(largest, 2 ** 15)
+        values = torch.randn(64, 96, generator=torch.Generator().manual_seed(0)) * 50
+        codes, _, _ = align_cache.quantize_rows_reference(values)
+        self.assertLessEqual(int(codes.max()), align_cache.ACTIVATION_LEVELS)
+
+    def test_rows_are_quantized_independently(self):
+        quiet = torch.linspace(-1, 1, 16)[None]
+        alone, _, _ = align_cache.quantize_rows_reference(quiet)
+        together, _, _ = align_cache.quantize_rows_reference(torch.cat([quiet, 1000 * quiet]))
+        torch.testing.assert_close(together[:1], alone, rtol=0, atol=0)
+        self.assertEqual(len(torch.unique(alone)), 16)
+
+    def test_reference_rejects_nonfinite_rows(self):
+        values = torch.tensor([[1., float("inf")], [1., 2.]])
+        _, scale, _ = align_cache.quantize_rows_reference(values)
+        self.assertTrue(scale[0].isnan())
+        self.assertTrue(scale[1].isfinite())
+
+    @unittest.skipIf(align_cache._quantize_rows is None, "whisperx_ext is not built")
+    def test_rust_kernels_match_the_torch_reference_bit_for_bit(self):
+        generator = torch.Generator().manual_seed(0)
+        for rows, width, threads in ((1, 1, 1), (3, 7, 1), (70, 768, 2), (300, 9, 3), (129, 3072, 2)):
+            values = torch.randn(rows, width, generator=generator) * torch.rand(rows, 1, generator=generator) * 10
+            values[0] = values[0].abs()
+            if rows > 2:
+                values[1] = -values[1].abs()
+                values[2, 0] = float("nan")
+            codes, scale, zero = torch.empty(rows, width, dtype=torch.uint8), torch.empty(rows), torch.empty(rows)
+            align_cache._quantize_rows(values.numpy(), codes.numpy(), scale.numpy(), zero.numpy(), threads)
+            expected = align_cache.quantize_rows_reference(values)
+            with self.subTest(rows=rows, width=width, threads=threads):
+                self.assertTrue(torch.equal(codes, expected[0]))
+                for actual, reference in ((scale, expected[1]), (zero, expected[2])):
+                    self.assertTrue(torch.equal(actual.nan_to_num(-1), reference.nan_to_num(-1)))
+                products = torch.randn(rows, 5, generator=generator)
+                sums, bias = torch.randn(5, generator=generator), torch.randn(5, generator=generator)
+                for offset in (None, bias):
+                    actual = products.clone()
+                    align_cache._dequantize_rows(actual.numpy(), scale.numpy(), zero.numpy(), sums.numpy(),
+                                                 None if offset is None else offset.numpy(), threads)
+                    reference = align_cache.dequantize_rows_reference(products.clone(), scale, zero, sums, offset)
+                    self.assertTrue(torch.equal(actual.nan_to_num(-1), reference.nan_to_num(-1)))
+
+    @unittest.skipIf(align_cache._quantize_rows is None, "whisperx_ext is not built")
+    def test_rust_kernels_reject_mismatched_buffers(self):
+        values = torch.zeros(2, 3)
+        with self.assertRaisesRegex(ValueError, "match"):
+            align_cache._quantize_rows(values.numpy(), torch.empty(2, 4, dtype=torch.uint8).numpy(),
+                                       torch.empty(2).numpy(), torch.empty(2).numpy())
+        with self.assertRaisesRegex(ValueError, "match"):
+            align_cache._dequantize_rows(values.numpy(), torch.empty(2).numpy(), torch.empty(2).numpy(),
+                                         torch.empty(4).numpy())
+        with self.assertRaisesRegex(ValueError, "contiguous"):
+            align_cache._quantize_rows(torch.zeros(3, 2).T.numpy(), torch.empty(2, 3, dtype=torch.uint8).numpy(),
+                                       torch.empty(2).numpy(), torch.empty(2).numpy())
 
 
