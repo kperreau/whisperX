@@ -120,6 +120,11 @@ class AlignCacheTest(unittest.TestCase):
             engine = align_cache.NativeEmissionEngine(path)
             self.assertIsInstance(engine.model.encoder.transformer.layers[0].attention.q_proj, torch.nn.Linear)
             self.assertIn("encoder.transformer.layers.0", engine.metadata["float_prefixes"])
+            self.assertIn("encoder.transformer.layers.1", engine.metadata["float_prefixes"])
+            self.assertIsInstance(engine.model.encoder.transformer.layers[0].feed_forward.intermediate_dense,
+                                  torch.nn.Linear)
+            self.assertIsInstance(engine.model.encoder.transformer.layers[1].feed_forward.intermediate_dense,
+                                  torch.nn.Linear)
             self.assertIsInstance(engine.model.encoder.transformer.layers[1].attention.q_proj, torch.nn.Linear)
             self.assertIsInstance(engine.model.encoder.transformer.layers[2].feed_forward.intermediate_dense,
                                   align_cache.Int8Linear)
